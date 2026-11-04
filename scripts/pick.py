@@ -507,6 +507,19 @@ def render(cat, qty, picked, total_scanned, fails_stat, unknowns, args):
         print("落选主因（前 3）: " + "；".join(fails_stat[:3]))
     print("\n提示: 价格是数量 " + str(qty) + " 的立创阶梯价（人民币含税）；库存为立创有效库存。"
           " 下单前请复核 datasheet 与封装。")
+    if picked:
+        best = min((price_at(r, qty) for r in picked if price_at(r, qty) is not None), default=None)
+        print("渠道: " + channel_hint(qty, best))
+
+
+def channel_hint(qty, unit_price=None):
+    """按数量给渠道倾向（口径与 bom.py 一致，实测校正见 references/channels.md）。"""
+    p = f" 当前最低 ¥{unit_price:g}/只。" if unit_price else ""
+    if qty <= 10:
+        return f"少量：淘宝样品/小包装常更便宜（运费与凑单要算），立创可与其它料合并下单省运费。{p}"
+    if qty < 100:
+        return f"中小批量：立创阶梯价通常最优，淘宝只作比价参考（零售价不一定随量降）。{p}"
+    return f"批量：走立创阶梯价，同时把型号丢给 1688 询盘比价（1688 阶梯价不公开，需人工问）。{p}"
 
 
 _ASSORT_RE = re.compile(r"芯片包|元件包|套装|套餐|组合装|混装|样品盒|样品包|整盒|一盒|散装包")
