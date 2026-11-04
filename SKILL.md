@@ -97,8 +97,10 @@ Excel 导出时选「CSV UTF-8」，中文列名能自动识别（型号/Comment
 - `references/spec-check.md`：指标核对判据（测试条件、降额表、替代风险分档）与标记释义
 - `references/channels.md`：渠道与采购执行细节
 - `data/spec-rules.yaml`：32 个器件 family 的可机读规则（critical/relaxable 参数、默认型号库、风险备注），
-  与 `research/spec-rules.md`（人读版，在调研目录）同源
-- 调研原始记录（探针响应、方法论、渠道实测）：`D:\WorkDesigns\3_WorkTools\Bom_Flow\research\`
+  人读版见 `references/research/spec-rules.md`
+- `references/research/`：调研证据链（`BOM-配单-调研报告.md` 总报告、`lcsc-probe.md` 立创接口、
+  `market-probe.md` 淘宝/1688 实测、`github-tools.md` 现成轮子、`cn-knowledge.md` 行业方法论、`spec-rules.md`）
+- 探针原始响应（排序/facet/替代料/淘宝详情 JSON，约 18 MB）：`D:\WorkDesigns\3_WorkTools\Bom_Flow\probe\`
 
 ## 已验证 / 未覆盖（用前先看）
 
