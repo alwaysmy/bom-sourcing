@@ -25,13 +25,16 @@ import json
 import math
 import re
 import sys
+import time
 from pathlib import Path
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from lcsc import Lcsc, money, price_at  # noqa: E402
+from lcsc import Lcsc, money, price_at, price_from_ladder  # noqa: E402
 from spec import detect_family, norm_pkg, parse_need, summarize, verify  # noqa: E402
 
 # --------------------------------------------------------------------------- 列识别
@@ -304,8 +307,52 @@ def channel_advice(line, rec, qty):
     return "立创批量 / 1688", "批量走阶梯价，1688 批发更优；淘宝仅作替代料来源"
 
 
+# --------------------------------------------------------------------------- 替代
+def _needs_alt(res, rec, oq):
+    """只有把握不足、或库存扛不住采购量时才值得去取替代料。"""
+    if res.get("confidence") not in ("exact", "param"):
+        return True
+    stock = rec.get("stock") or 0
+    return bool(oq) and stock < oq
+
+
+def collect_alternates(cli: Lcsc, lines, results, limit=3, sleep=0.6):
+    """给需要注意的行取立创替代料。返回 {行号: [候选dict]}。"""
+    out = {}
+    for l, r in zip(lines, results):
+        rec = r.get("chosen")
+        if not rec:
+            continue
+        oq = order_qty(l, rec)
+        if not _needs_alt(r, rec, oq):
+            continue
+        try:
+            sub = cli.alternates(rec["code"], qty=oq, limit=limit * 2, enrich=False)
+        except Exception as e:  # noqa: BLE001
+            print(f"[warn] 行{l['line']} 替代料获取失败: {type(e).__name__}: {e}", file=sys.stderr)
+            continue
+        src = sub.get("source_params") or {}
+        rows = []
+        for a in sub.get("alternates") or []:
+            params = a.get("params") or {}
+            diff = [f"{k}:{src[k]}→{v}" for k, v in params.items() if k in src and src[k] != v]
+            rows.append({
+                "code": a.get("code"), "model": a.get("model"), "brand": a.get("brand"),
+                "sim": a.get("sim"), "qty": oq, "stock": a.get("stock"),
+                "price": price_from_ladder(a.get("ladder") or [], oq),
+                "diff": "; ".join(diff)[:60],
+            })
+            if len(rows) >= limit:
+                break
+        out[l["line"]] = rows
+        print(f"[alt] 行{l['line']} {l['mpn']} -> {len(rows)} 条候选", file=sys.stderr)
+        time.sleep(sleep)
+    return out
+
+
 # --------------------------------------------------------------------------- 渲染
-def render(lines, results, args):
+def render(lines, results, args, alts=None):
+    alts = alts or {}
     out = [f"# BOM 配单报价单\n",
            f"- BOM: `{args.bom}`",
            f"- 选型倾向: {args.pref}　备料: {'按损耗模型' if args.spares else '不加备料'}",
@@ -350,14 +397,32 @@ def render(lines, results, args):
         out.append("## 需人工确认\n")
         for l, r in bad:
             out.append(f"- **{l['mpn']}**（行{l['line']}，{l['qty']} 件）：{r.get('reason') or '指标未完全核对通过'}")
-            alts = "、".join(f"{c['code']}({c['model']},{money(price_at(c, max(l['qty'], c.get('min_buy') or 1)))}元)"
-                             for c in (r.get("candidates") or [])[:3])
-            if alts:
-                out.append(f"  - 候选: {alts}")
+            alt_txt = "、".join(f"{c['code']}({c['model']},{money(price_at(c, max(l['qty'], c.get('min_buy') or 1)))}元)"
+                                for c in (r.get("candidates") or [])[:3])
+            if alt_txt:
+                out.append(f"  - 候选: {alt_txt}")
             for c in (r.get("checks") or []):
                 if c[3] in ("fail", "unknown", "warn"):
                     out.append(f"  - {c[0]} {c[1]} {c[2]}")
         out.append("")
+    if alts:
+        out.append("## 替代候选（立创 substitute 接口）\n")
+        for l, r in zip(lines, results):
+            block = alts.get(l["line"])
+            if not block:
+                continue
+            rec = r.get("chosen") or {}
+            out.append(f"**{l['mpn']}**（行{l['line']}，源料 {rec.get('code', '—')} "
+                       f"{rec.get('brand') or ''}）：")
+            for a in block:
+                diff = a.get("diff") or ""
+                out.append(f"- `{a['code']}` {a['model']}｜{a.get('brand') or ''}｜"
+                           f"相似 {a.get('sim') or '—'}｜{money(a.get('price'))}@{a.get('qty')}"
+                           f"｜库存 {a.get('stock')}" + (f"｜{diff}" if diff else ""))
+            out.append("")
+        out.append("风险档确认：MCU/电源/晶振/连接器/光耦/隔离器属高风险，替换前必须查手册核对；"
+                   "阻容感/LED 可替，但电容须同介质同耐压。\n")
+
     out.append("## 下一步建议\n")
     out.append("1. 逐行核对「指标核对」列的 `?`/`✘` 项（手册确认后再定料）")
     out.append("2. 核心器件（MCU/电源/晶振/连接器）不建议替换，先确认原厂料是否可采")
@@ -374,6 +439,9 @@ def main(argv=None):
     ap.add_argument("--json", default="", help="结构化结果写到文件")
     ap.add_argument("--columns", action="store_true", help="只打印解析结果（不联网）")
     ap.add_argument("--strict", action="store_true", help="指标未核对通过的行不出推荐")
+    ap.add_argument("--alternate", action="store_true",
+                    help="对把握不足/库存不够的行取立创替代料候选（多打 1 次接口/行）")
+    ap.add_argument("--alt-limit", type=int, default=3, help="每行替代候选数")
     ap.add_argument("--spares", dest="spares", action="store_true", default=True, help="按损耗模型加备料")
     ap.add_argument("--no-spares", dest="spares", action="store_false")
     ap.add_argument("--no-cache", action="store_true")
@@ -418,13 +486,15 @@ def main(argv=None):
         print(f"[{l['line']}/{len(lines)}] [{kind}] {l['mpn']} x{l['qty']} -> "
               f"{(ch['code'] + ' ' + ch['model']) if ch else '未匹配'} ({res['confidence']})",
               file=sys.stderr)
-    report = render(lines, results, a)
+    alts = collect_alternates(cli, lines, results, limit=a.alt_limit) if a.alternate else {}
+    report = render(lines, results, a, alts=alts)
     print(report)
     if a.md:
         Path(a.md).write_text(report, "utf-8")
         print(f"[saved] {a.md}", file=sys.stderr)
     if a.json:
-        Path(a.json).write_text(json.dumps({"lines": lines, "results": results}, ensure_ascii=False, indent=1), "utf-8")
+        Path(a.json).write_text(json.dumps({"lines": lines, "results": results, "alternates": alts},
+                                           ensure_ascii=False, indent=1), "utf-8")
         print(f"[saved] {a.json}", file=sys.stderr)
     return 0
 

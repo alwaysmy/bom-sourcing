@@ -1,0 +1,726 @@
+# 立创商城（szlcsc）品类索引 —— 由真实检索接口聚合，勿手改结构
+# 生成脚本: Bom_Flow/probe/lcsc/probe_catalog_build_yaml.py
+version: 1
+scanned_at: "2026-11-04"
+families:
+  resistor:
+    label_cn: '贴片电阻'
+    keywords: ['电阻', '贴片电阻']
+    catalog_id: '439'
+    parent: '电阻'
+    param_keys:
+      - key: '电阻类型'
+        unit: null
+        examples: ['厚膜电阻']
+        kind: enum
+      - key: '阻值'
+        unit: 'Ω'
+        examples: ['10kΩ', '1kΩ', '0Ω', '100kΩ', '4.7kΩ']
+        kind: value
+      - key: '精度'
+        unit: '%'
+        examples: ['±1%']
+        kind: value
+      - key: '功率'
+        unit: 'mW'
+        examples: ['100mW', '62.5mW', '125mW']
+        kind: value
+    key_constraints: ['阻值', '精度', '功率']
+    sample_size: 30
+    sample_parts: ['C25804', 'C21190', 'C25744']
+  mlcc:
+    label_cn: '贴片电容(MLCC)'
+    keywords: ['贴片电容', '电容', 'MLCC']
+    catalog_id: '313'
+    parent: '电容'
+    param_keys:
+      - key: '容值'
+        unit: 'F'
+        examples: ['100nF', '1uF', '10uF', '10nF', '1nF']
+        kind: value
+      - key: '精度'
+        unit: '%'
+        examples: ['±10%', '±20%', '±5%']
+        kind: value
+      - key: '额定电压'
+        unit: 'V'
+        examples: ['50V', '16V', '10V', '25V', '6.3V']
+        kind: value
+      - key: '温度系数'
+        unit: null
+        examples: ['X7R', 'X5R', 'C0G']
+        kind: enum
+    key_constraints: ['容值', '额定电压', '温度系数', '精度']
+    sample_size: 30
+    sample_parts: ['C14663', 'C1525', 'C15849']
+  inductor:
+    label_cn: '功率电感'
+    keywords: ['电感', '功率电感', '贴片电感']
+    catalog_id: '544'
+    parent: '电感/线圈/变压器'
+    param_keys:
+      - key: '电感值'
+        unit: 'uH'
+        examples: ['10uH', '4.7uH', '2.2uH', '33uH', '15uH']
+        kind: value
+      - key: '精度'
+        unit: '%'
+        examples: ['±20%']
+        kind: value
+      - key: '额定电流'
+        unit: 'A'
+        examples: ['2.35A', '2.3A', '4.5A', '1.5A', '3.3A']
+        kind: value
+      - key: '饱和电流(Isat)'
+        unit: 'A'
+        examples: ['3.5A', '3.2A', '5.5A', '2.4A', '4.9A']
+        kind: value
+      - key: '类型'
+        unit: null
+        examples: ['绕线电感']
+        kind: enum
+      - key: '直流电阻(DCR)'
+        unit: 'mΩ'
+        examples: ['240mΩ']
+        kind: value
+    key_constraints: ['电感值', '额定电流', '饱和电流(Isat)', '精度']
+    sample_size: 30
+    sample_parts: ['C602032', 'C167874', 'C132141']
+  bead:
+    label_cn: '磁珠'
+    keywords: ['磁珠']
+    catalog_id: '527'
+    parent: '磁珠/滤波器/EMI优化'
+    param_keys:
+      - key: '阻抗@频率'
+        unit: 'Ω'
+        examples: ['120Ω@100MHz', '600Ω@100MHz', '220Ω@100MHz', '100Ω@100MHz', '1kΩ@100MHz']
+        kind: value
+      - key: '误差'
+        unit: '%'
+        examples: ['±25%']
+        kind: value
+      - key: '直流电阻(DCR)'
+        unit: 'mΩ'
+        examples: ['50mΩ', '450mΩ', '300mΩ', '45mΩ', '150mΩ']
+        kind: value
+      - key: '额定电流'
+        unit: 'A'
+        examples: ['2A', '200mA', '500mA', '800mA', '1.3A']
+        kind: value
+    key_constraints: ['阻抗@频率', '额定电流', '直流电阻(DCR)']
+    sample_size: 30
+    sample_parts: ['C14709', 'C1002', 'C1017']
+  led:
+    label_cn: '发光二极管/LED'
+    keywords: ['发光二极管', 'LED']
+    catalog_id: '528'
+    parent: '光电器件'
+    param_keys:
+      - key: '发光颜色'
+        unit: null
+        examples: ['红色', '翠绿色', '白色', '黄色', '绿色']
+        kind: enum
+      - key: '正向压降(Vf)'
+        unit: 'V'
+        examples: ['1.8V~2.4V', '1.6V~2.6V', '2.6V~3.1V', '2.3V', '3.3V']
+        kind: range
+      - key: '功率'
+        unit: 'mW'
+        examples: ['40mW', '65mW', '100mW', '50mW', '70mW']
+        kind: value
+      - key: '灯头类型'
+        unit: null
+        examples: ['1.6mmx0.8mm方形灯头', '1.2mm方形灯头', '2mmx1.25mm方形灯头', '1mmx0.8mm方形灯头', '1mmx0.5mm方形灯头']
+        kind: text
+      - key: '测试电流'
+        unit: 'mA'
+        examples: ['20mA', '25mA', '5mA']
+        kind: value
+      - key: '波长'
+        unit: null
+        examples: ['510nm~531nm', '620nm~625nm', '584nm~594nm', '460nm~470nm']
+        kind: range
+    key_constraints: ['发光颜色', '正向压降(Vf)', '灯头类型']
+    sample_size: 30
+    sample_parts: ['C2286', 'C84256', 'C2297']
+  diode:
+    label_cn: '通用二极管'
+    keywords: ['二极管', '通用二极管', '开关二极管']
+    catalog_id: '370'
+    parent: '二极管'
+    param_keys:
+      - key: '二极管配置'
+        unit: null
+        examples: ['独立式', '1个独立式', '1对串联式']
+        kind: enum
+      - key: '正向压降(Vf)'
+        unit: 'V'
+        examples: ['1.1V@1A', '1V@1A', '1.25V@150mA', '930mV@1A', '1.18V@2A']
+        kind: value
+      - key: '直流反向耐压(Vr)'
+        unit: 'V'
+        examples: ['1kV', '70V', '85V', '50V', '40V']
+        kind: value
+      - key: '整流电流'
+        unit: 'A'
+        examples: ['1A', '900mA', '215mA', '160mA', '800mA']
+        kind: value
+    key_constraints: ['直流反向耐压(Vr)', '整流电流', '正向压降(Vf)', '二极管配置']
+    sample_size: 30
+    sample_parts: ['C95872', 'C64898', 'C727081']
+  schottky:
+    label_cn: '肖特基二极管'
+    keywords: ['肖特基二极管', '肖特基']
+    catalog_id: '373'
+    parent: '二极管'
+    param_keys:
+      - key: '二极管配置'
+        unit: null
+        examples: ['独立式', '1个独立式', '1对串联式', '1对共阴极']
+        kind: enum
+      - key: '正向压降(Vf)'
+        unit: 'mV'
+        examples: ['550mV@3A', '600mV@1A', '550mV@5A', '550mV@1A', '400mV@10mA']
+        kind: value
+      - key: '直流反向耐压(Vr)'
+        unit: 'V'
+        examples: ['40V', '30V', '100V', '60V', '20V']
+        kind: value
+      - key: '整流电流'
+        unit: 'A'
+        examples: ['3A', '1A', '5A', '200mA', '2A']
+        kind: value
+    key_constraints: ['直流反向耐压(Vr)', '整流电流', '正向压降(Vf)', '二极管配置']
+    sample_size: 30
+    sample_parts: ['C8678', 'C191023', 'C22452']
+  tvs:
+    label_cn: '静电和浪涌保护(TVS/ESD)'
+    keywords: ['TVS', '瞬态抑制二极管']
+    catalog_id: '526'
+    parent: '三极管/MOS管/晶体管'
+    param_keys:
+      - key: '反向工作电压(Vrwm)'
+        unit: 'V'
+        examples: ['5.25V', '7V；12V', '12V', '5V', '6.5V']
+        kind: value
+      - key: '钳位电压'
+        unit: 'V'
+        examples: ['17V', '26V；23V', '19V', '12V', '11.2V']
+        kind: value
+      - key: '极性'
+        unit: null
+        examples: ['单向', '双向']
+        kind: enum
+      - key: '峰值脉冲电流(Ipp)'
+        unit: 'A'
+        examples: ['5A', '12A@8/20us', '34A@8/20us；30A@8/20us', '6A', '53.57A']
+        kind: value
+      - key: '峰值脉冲功率(Ppp)'
+        unit: 'W'
+        examples: ['150W@8/20us', '400W']
+        kind: value
+      - key: '反向漏电流(Ir)'
+        unit: 'nA'
+        examples: ['1nA', '500nA']
+        kind: value
+    key_constraints: ['反向工作电压(Vrwm)', '钳位电压', '极性', '峰值脉冲电流(Ipp)']
+    sample_size: 30
+    sample_parts: ['C7519', 'C7420375', 'C32677']
+  esd:
+    label_cn: '静电和浪涌保护(TVS/ESD)'
+    keywords: ['ESD', '静电保护']
+    catalog_id: '526'
+    parent: '三极管/MOS管/晶体管'
+    param_keys:
+      - key: '反向工作电压(Vrwm)'
+        unit: 'V'
+        examples: ['5.25V', '7V；12V', '5V', '5.5V', '24V']
+        kind: value
+      - key: '钳位电压'
+        unit: 'V'
+        examples: ['17V', '26V；23V', '12V', '15V', '10V']
+        kind: value
+      - key: '极性'
+        unit: null
+        examples: ['单向', '双向']
+        kind: enum
+      - key: '峰值脉冲电流(Ipp)'
+        unit: 'A'
+        examples: ['5A', '12A@8/20us', '6A', '6A@8/20us', '2.5A@8/20us']
+        kind: value
+      - key: '反向漏电流(Ir)'
+        unit: 'nA'
+        examples: ['1nA', '500nA', '10nA']
+        kind: value
+      - key: '峰值脉冲功率(Ppp)'
+        unit: 'W'
+        examples: ['150W@8/20us', '400W']
+        kind: value
+    key_constraints: ['反向工作电压(Vrwm)', '钳位电压', '极性', '峰值脉冲电流(Ipp)']
+    sample_size: 30
+    sample_parts: ['C7519', 'C7420375', 'C2827654']
+  bjt:
+    label_cn: '三极管(BJT)'
+    keywords: ['三极管', 'BJT']
+    catalog_id: '326'
+    parent: '三极管/MOS管/晶体管'
+    param_keys:
+      - key: '晶体管类型'
+        unit: null
+        examples: ['NPN', 'PNP']
+        kind: enum
+      - key: '集电极电流(Ic)'
+        unit: 'A'
+        examples: ['1.5A', '200mA', '500mA', '600mA', '3A']
+        kind: value
+      - key: '集射极击穿电压(Vceo)'
+        unit: 'V'
+        examples: ['25V', '40V', '160V', '150V', '30V']
+        kind: value
+      - key: '耗散功率(Pd)'
+        unit: 'mW'
+        examples: ['300mW', '200mW', '225mW', '500mW']
+        kind: value
+    key_constraints: ['晶体管类型', '集电极电流(Ic)', '集射极击穿电压(Vceo)', '耗散功率(Pd)']
+    sample_size: 30
+    sample_parts: ['C2150', 'C7420370', 'C20526']
+  mosfet:
+    label_cn: '场效应管(MOSFET)'
+    keywords: ['MOSFET', 'MOS管', '场效应管']
+    catalog_id: '381'
+    parent: '三极管/MOS管/晶体管'
+    param_keys:
+      - key: '数量'
+        unit: null
+        examples: ['1个P沟道', '1个N沟道', '2个N沟道']
+        kind: enum
+      - key: '漏源电压(Vdss)'
+        unit: 'V'
+        examples: ['30V', '60V', '20V', '50V']
+        kind: value
+      - key: '连续漏极电流(Id)'
+        unit: 'A'
+        examples: ['4A', '5.7A', '115mA', '4.2A', '5.8A']
+        kind: value
+      - key: '导通电阻(RDS(on))'
+        unit: 'Ω'
+        examples: ['47mΩ@10V；85mΩ@2.5V；60mΩ@4.5V', '48mΩ@2.5V', '5Ω@10V', '50mΩ@10V', '17mΩ@10V']
+        kind: value
+    key_constraints: ['数量', '漏源电压(Vdss)', '连续漏极电流(Id)', '导通电阻(RDS(on))']
+    sample_size: 30
+    sample_parts: ['C15127', 'C20917', 'C8545']
+  mcu:
+    label_cn: '单片机(MCU/MPU/SOC)'
+    keywords: ['单片机', 'MCU']
+    catalog_id: '11329'
+    parent: '单片机/微控制器'
+    param_keys:
+      - key: 'CPU内核'
+        unit: null
+        examples: ['ARM Cortex-M3', 'ARM Cortex-M4', 'ARM Cortex-M0+', 'AVR', 'ARM Cortex-M0']
+        kind: text
+      - key: 'CPU最大主频'
+        unit: 'MHz'
+        examples: ['72MHz', '168MHz', '133MHz', '20MHz', '48MHz']
+        kind: value
+      - key: 'CPU位数'
+        unit: 'Bit'
+        examples: ['32 Bit', '8 Bit']
+        kind: value
+      - key: '程序存储容量'
+        unit: 'B'
+        examples: ['64KB', '512KB', '256KB', '1MB', '128KB']
+        kind: value
+      - key: '程序存储器类型'
+        unit: null
+        examples: ['外接']
+        kind: enum
+      - key: '振荡器类型'
+        unit: null
+        examples: ['内置+外置']
+        kind: enum
+    key_constraints: ['CPU内核', 'CPU最大主频', '程序存储容量', 'CPU位数']
+    sample_size: 30
+    sample_parts: ['C8734', 'C28730', 'C8323']
+  ldo:
+    label_cn: '线性稳压器(LDO)'
+    keywords: ['LDO', '线性稳压器']
+    catalog_id: '387'
+    parent: '电源管理'
+    param_keys:
+      - key: '输出极性'
+        unit: null
+        examples: ['正极']
+        kind: enum
+      - key: '工作电压'
+        unit: 'V'
+        examples: ['15V', '12V', '6V', '5.5V', '18V']
+        kind: value
+      - key: '输出电压'
+        unit: 'V'
+        examples: ['3.3V', '5V']
+        kind: value
+      - key: '输出电流'
+        unit: 'A'
+        examples: ['1A', '500mA', '200mA', '300mA', '600mA']
+        kind: value
+    key_constraints: ['输出电压', '输出电流', '工作电压', '输出极性']
+    sample_size: 30
+    sample_parts: ['C6186', 'C347222', 'C82942']
+  dcdc:
+    label_cn: 'DC-DC电源芯片'
+    keywords: ['DC-DC电源芯片', 'DC-DC', 'DCDC']
+    catalog_id: '484'
+    parent: '电源管理'
+    param_keys:
+      - key: '功能类型'
+        unit: null
+        examples: ['降压型', '升压型', '升降压型']
+        kind: enum
+      - key: '工作电压'
+        unit: 'V'
+        examples: ['5.5V~36V', '4.5V~28V', '4.5V~40V', '2V~24V', '2.5V~5.5V']
+        kind: range
+      - key: '输出电流'
+        unit: 'A'
+        examples: ['3A', '2A', '4A', '5A', '1A']
+        kind: value
+      - key: '输出电压'
+        unit: 'V'
+        examples: ['1.221V~32.04V', '5V', '600mV~28V', '600mV~5.5V', '800mV~25V']
+        kind: range
+      - key: '开关频率'
+        unit: 'Hz'
+        examples: ['400kHz', '500kHz', '1.5MHz', '1MHz', '600kHz']
+        kind: value
+    key_constraints: ['功能类型', '工作电压', '输出电压', '输出电流']
+    sample_size: 30
+    sample_parts: ['C9864', 'C311983', 'C61063']
+  opamp:
+    label_cn: '运算放大器'
+    keywords: ['运算放大器', '运放']
+    catalog_id: '516'
+    parent: '运算放大器/比较器'
+    param_keys:
+      - key: '输入失调电压(Vos)'
+        unit: 'V'
+        examples: ['7mV', '3mV', '500uV', '1.6mV', '4.5mV']
+        kind: value
+      - key: '放大器数'
+        unit: null
+        examples: ['2', '1', '4']
+        kind: value
+      - key: '增益带宽积(GBW)'
+        unit: 'Hz'
+        examples: ['1MHz', '700kHz', '10MHz', '1.2MHz', '1.3MHz']
+        kind: value
+      - key: '轨到轨'
+        unit: null
+        examples: ['轨到轨输出', '轨到轨输入,轨到轨输出']
+        kind: text
+      - key: '输入失调电压温漂(Vos TC)'
+        unit: 'uV'
+        examples: ['7uV/℃', '5uV/℃', '30uV/℃', '3.5uV/℃']
+        kind: value
+      - key: '输入偏置电流(Ib)'
+        unit: 'nA'
+        examples: ['45nA', '50nA', '250nA']
+        kind: value
+      - key: '压摆率(SR)'
+        unit: 'V'
+        examples: ['400V/ms']
+        kind: value
+    key_constraints: ['放大器数', '增益带宽积(GBW)', '输入失调电压(Vos)', '轨到轨']
+    sample_size: 30
+    sample_parts: ['C7950', 'C7972', 'C5423']
+  comparator:
+    label_cn: '比较器'
+    keywords: ['比较器']
+    catalog_id: '517'
+    parent: '运算放大器/比较器'
+    param_keys:
+      - key: '比较器数'
+        unit: null
+        examples: ['双路', '单路', '四路']
+        kind: enum
+      - key: '输入偏置电流(Ib)'
+        unit: 'A'
+        examples: ['25nA', '1pA', '250nA', '100nA', '20nA']
+        kind: value
+      - key: '输入失调电压(Vos)'
+        unit: 'V'
+        examples: ['5mV', '2mV', '1mV', '7mV', '800uV']
+        kind: value
+      - key: '传播延迟(tpd)'
+        unit: 's'
+        examples: ['300ns', '1.3us', '40ns', '600ns', '4.5ns']
+        kind: value
+      - key: '输出模式'
+        unit: null
+        examples: ['TTL；CMOS']
+        kind: text
+      - key: '输出类型'
+        unit: null
+        examples: ['开漏']
+        kind: enum
+      - key: '静态电流(Iq)'
+        unit: 'mA'
+        examples: ['2.5mA']
+        kind: value
+      - key: '滞后电压(Vhys)'
+        unit: 'mV'
+        examples: ['5.5mV']
+        kind: value
+    key_constraints: ['比较器数', '传播延迟(tpd)', '输入失调电压(Vos)', '输入偏置电流(Ib)']
+    sample_size: 30
+    sample_parts: ['C7955', 'C67470', 'C105188']
+  vref:
+    label_cn: '电压基准芯片'
+    keywords: ['电压基准芯片', '电压基准']
+    catalog_id: '486'
+    parent: '电源管理'
+    param_keys:
+      - key: '输出类型'
+        unit: null
+        examples: ['可调', '固定']
+        kind: enum
+      - key: '输出电压'
+        unit: null
+        examples: ['2.5V~36V', '3.3V', '2.5V', '3V', '2.495V~36V']
+        kind: text
+      - key: '输出电流'
+        unit: 'mA'
+        examples: ['100mA', '25mA', '10mA', '150mA', '5mA']
+        kind: value
+      - key: '工作电压'
+        unit: 'V'
+        examples: ['3.35V~5.5V', '2.55V~5.5V', '3.05V~5.5V', '2.7V~18V', '37V']
+        kind: range
+      - key: '精度'
+        unit: '%'
+        examples: ['±0.5%', '±1%', '±0.4%']
+        kind: value
+    key_constraints: ['输出类型', '输出电压', '输出电流']
+    sample_size: 30
+    sample_parts: ['C3113', 'C36658', 'C11334']
+  eeprom:
+    label_cn: 'EEPROM'
+    keywords: ['EEPROM']
+    catalog_id: '502'
+    parent: '存储器'
+    param_keys:
+      - key: '接口类型'
+        unit: null
+        examples: ['I2C', 'SPI']
+        kind: enum
+      - key: '存储容量'
+        unit: 'Kbit'
+        examples: ['256Kbit', '64Kbit', '2Kbit', '512Kbit', '128Kbit']
+        kind: value
+      - key: '时钟频率(fc)'
+        unit: 'Hz'
+        examples: ['1MHz', '400kHz', '2MHz']
+        kind: value
+      - key: '写周期时间(Tw)'
+        unit: 'ms'
+        examples: ['5ms', '3ms', '6ms', '10ms']
+        kind: value
+    key_constraints: ['存储容量', '接口类型', '时钟频率(fc)']
+    sample_size: 30
+    sample_parts: ['C6482', 'C79988', 'C688857']
+  norflash:
+    label_cn: 'NOR FLASH'
+    keywords: ['NOR FLASH', 'NORFLASH']
+    catalog_id: '501'
+    parent: '存储器'
+    param_keys:
+      - key: '接口类型'
+        unit: null
+        examples: ['SPI']
+        kind: enum
+      - key: '存储容量'
+        unit: 'Mbit'
+        examples: ['128Mbit', '64Mbit', '32Mbit', '256Mbit', '16Mbit']
+        kind: value
+      - key: '时钟频率(fc)'
+        unit: 'MHz'
+        examples: ['133MHz', '104MHz', '100MHz']
+        kind: value
+      - key: '工作电压'
+        unit: 'V'
+        examples: ['2.7V~3.6V', '1.65V~3.6V']
+        kind: range
+    key_constraints: ['存储容量', '接口类型', '时钟频率(fc)', '工作电压']
+    sample_size: 30
+    sample_parts: ['C97521', 'C179171', 'C179173']
+  crystal:
+    label_cn: '无源晶振'
+    keywords: ['无源晶振']
+    catalog_id: '537'
+    parent: '振荡器/谐振器'
+    param_keys:
+      - key: '晶振类型'
+        unit: null
+        examples: ['贴片晶振', '直插晶振']
+        kind: enum
+      - key: '频率'
+        unit: 'Hz'
+        examples: ['25MHz', '8MHz', '32.768kHz', '12MHz', '16MHz']
+        kind: value
+      - key: '常温频差'
+        unit: 'ppm'
+        examples: ['±10ppm', '±20ppm', '±30ppm']
+        kind: value
+      - key: '负载电容'
+        unit: 'pF'
+        examples: ['12pF', '20pF', '12.5pF', '9pF', '10pF']
+        kind: value
+    key_constraints: ['频率', '负载电容', '常温频差']
+    sample_size: 30
+    sample_parts: ['C9006', 'C115962', 'C32346']
+  oscillator:
+    label_cn: '有源晶振'
+    keywords: ['有源晶振']
+    catalog_id: '364'
+    parent: '振荡器/谐振器'
+    param_keys:
+      - key: '频率'
+        unit: 'Hz'
+        examples: ['25MHz', '50MHz', '8MHz', '24MHz', '32.768kHz']
+        kind: value
+      - key: '常温频差'
+        unit: 'ppm'
+        examples: ['±10ppm', '±20ppm']
+        kind: value
+      - key: '输出模式'
+        unit: null
+        examples: ['CMOS', 'HCMOS']
+        kind: enum
+      - key: '工作电压'
+        unit: 'V'
+        examples: ['1.8V~3.3V', '1.62V~3.63V']
+        kind: range
+    key_constraints: ['频率', '工作电压', '常温频差', '输出模式']
+    sample_size: 30
+    sample_parts: ['C669088', 'C717684', 'C5203552']
+  optocoupler:
+    label_cn: '晶体管输出光耦'
+    keywords: ['光耦', '光电耦合器']
+    catalog_id: '351'
+    parent: '光耦'
+    param_keys:
+      - key: '输出类型'
+        unit: null
+        examples: ['光电三极管']
+        kind: enum
+      - key: '正向压降(Vf)'
+        unit: 'V'
+        examples: ['1.2V', '1.25V', '1.24V', '1.15V']
+        kind: value
+      - key: '输出电流'
+        unit: 'mA'
+        examples: ['50mA']
+        kind: value
+      - key: '输入类型'
+        unit: null
+        examples: ['DC', 'AC,DC']
+        kind: enum
+      - key: '隔离电压(Vrms)'
+        unit: 'kV'
+        examples: ['5kV', '2.5kV']
+        kind: value
+    key_constraints: ['输出类型', '输入类型', '正向压降(Vf)']
+    sample_size: 30
+    sample_parts: ['C115450', 'C42379244', 'C42381015']
+  isolator:
+    label_cn: '数字隔离器'
+    keywords: ['数字隔离器']
+    catalog_id: '581'
+    parent: '信号隔离器件'
+    param_keys:
+      - key: '正向通道数'
+        unit: null
+        examples: ['1', '3', '2', '4', '6']
+        kind: value
+      - key: '反向通道数'
+        unit: null
+        examples: ['1', '0', '2']
+        kind: value
+      - key: '最大数据速率'
+        unit: null
+        examples: ['100Mbps', '1Mbps', '40Mbps', '150Kbps', '150Mbps']
+        kind: value
+      - key: '默认输出'
+        unit: null
+        examples: ['高电平', '低电平']
+        kind: enum
+      - key: '隔离电压(Vrms)'
+        unit: null
+        examples: ['2500', '3000']
+        kind: value
+    key_constraints: ['正向通道数', '反向通道数', '最大数据速率']
+    sample_size: 30
+    sample_parts: ['C366164', 'C9669', 'C41409433']
+  connector:
+    label_cn: '排针'
+    keywords: ['排针']
+    catalog_id: '644'
+    parent: '连接器'
+    param_keys:
+      - key: '插针结构'
+        unit: null
+        examples: ['1x4P', '1x2P', '1x3P', '1x5P', '1x6P']
+        kind: enum
+      - key: '间距'
+        unit: null
+        examples: ['2.54mm']
+        kind: value
+      - key: '圆针/方针'
+        unit: null
+        examples: ['方针']
+        kind: enum
+      - key: '安装方式'
+        unit: null
+        examples: ['直插', '弯插']
+        kind: enum
+      - key: '行距'
+        unit: null
+        examples: ['2.54mm']
+        kind: value
+    key_constraints: ['插针结构', '间距', '安装方式']
+    sample_size: 30
+    sample_parts: ['C2691448', 'C492401', 'C2937625']
+  relay:
+    label_cn: '功率继电器'
+    keywords: ['继电器', '功率继电器']
+    catalog_id: '531'
+    parent: '继电器'
+    param_keys:
+      - key: '线圈电压'
+        unit: 'V'
+        examples: ['5V', '12V', '24V', '3V']
+        kind: value
+      - key: '触点形式'
+        unit: null
+        examples: ['一组转换:1C(单刀双掷-转换)', '一组常开:1A(单刀单掷-常开)', '两组转换:2C(双刀双掷-转换)']
+        kind: text
+      - key: '引脚数'
+        unit: null
+        examples: ['5', '4', '6', '8']
+        kind: value
+      - key: '触点容量(电阻负载)'
+        unit: 'A'
+        examples: ['5A@250VAC；3A@30VDC', '5A@30VDC；10A@250VAC', '10A@250VAC；3A@30VDC；5A@30VDC；3A@250VAC', '3A@250VAC；3A@30VDC', '5A@30VDC；5A@250VAC']
+        kind: value
+      - key: '最大切换电压'
+        unit: 'V'
+        examples: ['250V@AC', '250V@AC；30V@DC', '277V@AC；30V@DC', '125V@AC']
+        kind: value
+      - key: '额定线圈功率'
+        unit: 'mW'
+        examples: ['200mW']
+        kind: value
+    key_constraints: ['线圈电压', '触点形式', '触点容量(电阻负载)']
+    sample_size: 30
+    sample_parts: ['C35449', 'C30431', 'C34758']

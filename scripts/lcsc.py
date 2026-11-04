@@ -186,7 +186,7 @@ class Lcsc:
     # -- 查询 -----------------------------------------------------------------
     def raw_search(self, keyword, sort=0, page=1, page_size=30, brand_id="", package="",
                    price_min="", price_max="", demand_number="", spot=1, discount=1,
-                   cache=True):
+                   catalog_id="", cache=True):
         body = dict(DEFAULT_BODY)
         body.update(
             keyword=keyword,
@@ -194,6 +194,7 @@ class Lcsc:
             currentPage=page,
             pageSize=page_size,
             brandIdFilter=brand_id,
+            catalogIdFilter=catalog_id,
             standardFilter=package,
             startPrice=price_min,
             endPrice=price_max,
@@ -218,6 +219,8 @@ class Lcsc:
             "sort_sign": sr.get("querySortBySign"),
             "brands": sr.get("gradePlateGroup") or [],
             "packages": sr.get("encapsulationGroup") or [],
+            "catalogs": sr.get("catalogGroup") or [],
+            "parents": sr.get("parentCatalogGroup") or [],
             "records": [normalize(it) for it in (sr.get("productRecordList") or [])],
             "fetched": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         }
@@ -520,6 +523,7 @@ def normalize(record):
         "brand": vo.get("productGradePlateName"),
         "package": vo.get("encapsulationModel") or record.get("lightStandard"),
         "type": vo.get("productType"),
+        "type_code": vo.get("productTypeCode"),
         "spec": (record.get("lightProductIntro") or "").strip(),
         "params": params,
         "stock": vo.get("validStockNumber") if vo.get("validStockNumber") is not None else vo.get("stockNumber"),
