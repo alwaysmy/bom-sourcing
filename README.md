@@ -12,7 +12,7 @@
 |---|---|
 | 手上有 BOM 表 | `python scripts/bom.py your_bom.csv --qty 10` |
 | 只有一句需求 | `python scripts/pick.py "找 3.3V 1A 的 LDO"` |
-| 查单个料 | `python scripts/lcsc.py price C8734 --qty 100` / `search` / `detail` / `compare` |
+| 查单个料 | `python scripts/lcsc.py search "STM32F103C8T6" --sort sales` / `price C8734 --qty 100`（JSON）/ `detail` / `compare` |
 | 找替代料 | `python scripts/lcsc.py alternate C8734 --qty 100` |
 | 淘宝比价 | `python scripts/taobao.py search "STM32F103C8T6" --sort sales --limit 10` |
 
