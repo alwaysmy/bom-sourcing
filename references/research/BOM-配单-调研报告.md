@@ -7,8 +7,8 @@
 
 **能做，而且不用造轮子。** 立创中文站有一个免登录的 JSON 检索接口（唯一暴露「销量」的入口），
 淘宝/1688/京东没有可用的免费接口（只能靠带登录态的真浏览器），
-中间那层「BOM 行 → 候选料 → 指标核对 → 阶梯价落档 → 渠道建议」才是必须自建的部分，
-目前已实现并端到端跑通（16 行示例 BOM，¥28.84）。
+中间那层「BOM 行 / 一句话需求 → 候选料 → 指标核对 → 阶梯价落档 → 渠道建议」才是必须自建的部分，
+目前已实现并端到端跑通（16 行示例 BOM ¥28.84 + 5 组按意图找料）。
 
 ## 1. 交付物
 
@@ -17,9 +17,13 @@
 | `C:\Users\dell\.agents\skills\bom-sourcing\` | 可触发 skill：`SKILL.md` + `scripts/` + `references/` |
 | `scripts\lcsc.py` | 立创检索/取价/详情/对比/替代料，纯标准库、带缓存（约 800 行） |
 | `scripts\bom.py` | BOM 解析 → 匹配 → 指标核对 → 报价单（Markdown/JSON） |
+| `scripts\pick.py` | 按意图找料：一句话需求 → 品类 → 候选 → 指标过滤 → 排序（约 750 行） |
+| `scripts\taobao.py` | 淘宝/1688 检索（走 Kimi WebBridge 登录态浏览器），元/包归一、混装包与区间价识别 |
 | `scripts\spec.py` | 参数解析与指标比对，可单跑自测 |
+| `data\categories.yaml` | 25 个 family 的品类 id、关键词、参数键与关键约束 |
 | `references\lcsc-api.md` | 立创接口全部实测事实（含反例） |
 | `references\spec-check.md` | 指标核对判据与替代风险分档 |
+| `references\pick-intent.md` | 按意图找料的实现说明（品类解析、别名映射、比较语义） |
 | `references\channels.md` | 渠道选择、采购执行、环境坑 |
 | `research\spec-rules.yaml` | 32 个器件 family 的 critical/relaxable 参数、默认型号库、风险备注（2267 行） |
 | `research\{github-tools,lcsc-probe,market-probe,cn-knowledge,spec-rules}.md` | 四路调研原始报告 |
@@ -96,17 +100,56 @@ KiCost（不含立创）、InvenTree/BOMist（无立创通道）、淘宝/1688 �
 ¥8.58（sim 95，原厂卷带）、C279569/C8304 `STM32F103CBT6` ¥9.94/¥11.77（Flash 翻倍）、C1121900 `…C8T7` ¥26.91（工业温区）；
 国产替代：APM32F103CBT6 ¥5.64、APM32F103C8T6 ¥5.82、CH32F103C8T6 ¥5.41、CKS32F103CBT6 ¥6.97、HK32F103CBT6A ¥7.61。
 
-## 6. 已知限制
+## 6. 按意图找料（`pick.py`，实测）
+
+只给一句需求、还没定型号时的入口。链路：**意图 → 品类（`catalogIdFilter`）→ 候选 60 条 → 动态参数键 + 别名 → 过滤排序去重 → 可选淘宝比价**。
+
+| 需求 | 品类/命中 | 结果 |
+|---|---|---|
+| `找 3.3V 1A 的 LDO` | 线性稳压器(LDO) 387，扫 53 | C6186 AMS1117-3.3 ¥0.7247@100、C485517 TLV75733PDBVR ¥0.7447、C347256 AMS1117-3.3S ¥0.1593 |
+| `10uF 25V 0805 电容` | 贴片电容(MLCC) 313，扫 60 | C15850 三星 X5R ¥0.2574（库存 4.2 万）、C440198 村田 50V ¥0.8173 |
+| `30V 5A N沟道 MOS` | 场效应管(MOSFET) 381，扫 46 | C20917 AO3400A ¥0.543、C2938367 AO3400 ¥0.1861、C19019 CJ3400 ¥0.225 |
+| `8MHz 5032 无源晶振` | 无源晶振 537，扫 60 | C115962 X50328MSB2GI ¥1.50（销量 13564）、C5280575 ¥1.51（±10ppm） |
+| `pick --family norflash --param "存储容量>=64Mbit"` | NOR FLASH 501，扫 55 | C97521 W25Q128JVSIQ ¥15.01、C179171 W25Q64JVSSIQ ¥11.71（库存 68）、C2928891 GD25Q128ESIGR ¥8.47 |
+
+关键机制：
+- **品类解析**：裸词检索只看 facet `catalogGroup[]`，`value` 就是 `catalogIdFilter`；`25` 个 family 已固化在 `data/categories.yaml`（无需现场解析）。
+- **参数键随类目变**：LDO 是 `输出极性/工作电压/输出电压/输出电流`，MOS 是 `数量/漏源电压(Vdss)/连续漏极电流(Id)/导通电阻(RDS(on))`，MLCC 是 `容值/精度/额定电压/温度系数` —— 运行时从候选里聚键，不硬编码。
+- **比较语义看极性**：`输出电压=3.3V` 等值、`额定电压>=25V` 下限（50V 的料合格）、晶振频率等值（要 8MHz 不能给 25MHz），`导通电阻` 上限。
+- **缺参数视为不满足**（`--allow-unknown` 可放行）：立创参数是卖家填的，缺字段不能当合格。
+- **落选主因**会写出来（`3.3V→输出电压=5V ×11`、`1A→输出电流=500mA ×10`），用来判断该放宽哪一项。
+
+## 7. 已知限制
 
 - 立创参数区间筛选**无服务端支持**（`parmeterValueList` 恒为空，`queryParameterValue` 返 0 条）→ 只能取一页候选后本地过滤
+- **找料只能看到采样到的候选**（默认 2 页 60 条，单页上限 30）；`totalCount` 被服务端截到 1500，真实规模看 `catalogGroup[].count`
 - BOM 一键配单（`bom.szlcsc.com/bom/upload`）有 HTTP 接口但需登录 Cookie，本 skill 未内置（避免要求 token）
 - 淘宝/1688 无免登录脚本化通道：淘宝必须登录态浏览器且销量排序只能点 tab，1688 阶梯价拿不到 → 只能给操作配方
+- 淘宝「价格」tab 点击实测无效 → 价格只能在客户端排序，且只覆盖本页样本
 - 1688 阶梯价拿不到，走量价必须人工询盘
 - 价格是快照，交付时必须带抓取时间
 
-## 7. 相关文件
+## 8. 相关文件
 
 - 调研：`research\github-tools.md`（现成轮子 16 个）、`research\lcsc-probe.md`（立创接口）、
-  `research\market-probe.md`（淘宝/1688/京东）、`research\cn-knowledge.md`（配单 SOP 与渠道）
+  `research\market-probe.md`（淘宝/1688/京东）、`research\cn-knowledge.md`（配单 SOP 与渠道）、
+  `research\categories.md`（品类目录与参数键扫描）、`research\taobao-tool.md`（淘宝/1688 CLI 用法）
 - 规则：`research\spec-rules.yaml` + `research\spec-rules.md`
-- 探针：`probe\lcsc\`（排序/facet/替代料原始响应）、`probe\taobao\`、`probe\market\`、`probe\github\`
+- 找料数据：`D:\WorkDesigns\3_WorkTools\skills\bom-sourcing\data\categories.yaml`（25 family）
+- 探针：`probe\lcsc\`（排序/facet/替代料/品类参数原始响应）、`probe\taobao\`、`probe\market\`、`probe\github\`
+- 远端：<https://github.com/alwaysmy/bom-sourcing>（公开，main；由 `skills` 仓的 `bom-sourcing/` 子树发布）
+
+## 9. 发布方式（skill 仓 → 独立仓库）
+
+真源是 `D:\WorkDesigns\3_WorkTools\skills\bom-sourcing\`（`C:\Users\dell\.agents\skills\bom-sourcing` 是指向它的 junction）。
+推送只取该子树，不动 `skills` 仓里别人的提交：
+
+```powershell
+cd D:\WorkDesigns\3_WorkTools\skills
+git add bom-sourcing; git commit -m "..."          # 先落在 skills 仓
+git branch -D bom-sourcing-standalone              # 重建子树分支
+git subtree split --prefix=bom-sourcing -b bom-sourcing-standalone
+git push https://github.com/alwaysmy/bom-sourcing.git bom-sourcing-standalone:refs/heads/main
+```
+
+验证：`git clone --depth 1 https://github.com/alwaysmy/bom-sourcing.git`，比对 `git ls-tree -r --name-only bom-sourcing-standalone` 的文件清单（当前 28 个文件）。
