@@ -47,7 +47,7 @@ Excel 导出时选「CSV UTF-8」，中文列名能自动识别（型号/Comment
 | A1 | 型号正名：把规格描述归一成"型号 / 参数行" | ✅ `bom.py` 的 `classify()` |
 | A2 | 检索取候选 | ✅ `lcsc.py search` / `bom.py` |
 | A3 | 指标核对 + 降额 | ✅ `spec.py`（阻值/容值/电感/耐压/精度/功率/频率/封装） |
-| A4 | 替代料 | ✅ `lcsc.py alternate`（海外站 `alternatePartList` + 参数差异）；同型号多 C 号自动换（按有货+价格） |
+| A4 | 替代料 | ✅ `lcsc.py alternate`（立创 substitute 接口：相似度 + 参数差异 + 国产替代，海外站兜底）；同型号多 C 号自动换（按有货+价格） |
 | A5 | 数量与备料 | ✅ `bom.py`（阻容感 0.3% 至少 +5，IC 不加） |
 | A6 | 渠道分流 | ✅ `bom.py` 的 `channel_advice()` |
 | A7 | 下单检查 | ❌ 不下单；只给建议与链接 |
@@ -93,18 +93,19 @@ Excel 导出时选「CSV UTF-8」，中文列名能自动识别（型号/Comment
 
 ## 数据与知识
 
-- `references/lcsc-api.md`：立创接口全部实测事实（请求体、sortNumber、facet、反例）
-- `references/spec-check.md`：指标核对判据（测试条件、降额表、替代风险分档）与标记录义
+- `references/lcsc-api.md`：立创接口全部实测事实（请求体、sortNumber、facet、替代料接口、反例）
+- `references/spec-check.md`：指标核对判据（测试条件、降额表、替代风险分档）与标记释义
 - `references/channels.md`：渠道与采购执行细节
-- `../data/spec-rules.yaml`（在 `D:\WorkDesigns\3_WorkTools\Bom_Flow\research\` 同源副本）：
-  32 个器件 family 的 critical/relaxable 参数、默认型号库、风险备注
-- 调研原始记录：`D:\WorkDesigns\3_WorkTools\Bom_Flow\research\`
+- `data/spec-rules.yaml`：32 个器件 family 的可机读规则（critical/relaxable 参数、默认型号库、风险备注），
+  与 `research/spec-rules.md`（人读版，在调研目录）同源
+- 调研原始记录（探针响应、方法论、渠道实测）：`D:\WorkDesigns\3_WorkTools\Bom_Flow\research\`
 
 ## 已验证 / 未覆盖（用前先看）
 
 **已验证可用**
 - 立创中文站搜索、阶梯价、库存、销量排序、结构化参数、商品页与 datasheet 直链（全部免登录）
-- 替代料：海外站 `alternatePartList`（含中文参数差异），人民币价格由中文站回填
+- 替代料：`list.szlcsc.com/substitute/simple/list` 免登录直接返回相似度、参数差异、人民币阶梯价
+  （`C8734` 实测 36 条，含 APM32/CH32/HK32/CKS32 等国产替代；海外站同料只有 5 条）
 - BOM 解析：CSV/TSV/XLSX/纯文本，中英列名
 - 指标核对：阻值/容值/电感/耐压/精度/功率/频率/封装 + MLCC/钽降额提示
 - 淘宝/1688：需真浏览器（见 `references/channels.md`），脚本不做自动化抓取
@@ -125,6 +126,8 @@ Excel 导出时选「CSV UTF-8」，中文列名能自动识别（型号/Comment
    报价前必须按 C 号确认，不能只看型号。
 3. **参数字段是卖家填的**：`paramLinkedMap` 缺项、单位不规范很常见；核对列出现 `?` 时必须回原厂手册，
    尤其是耐压、精度、测试条件。
+4. **筛选写错是静默失败**：多值筛选的分隔符是 `$`（`brandIdFilter: "91$842"`），用逗号会**静默返回 0 条**；
+   `pageSize > 30` 同样静默返 0 条而不是报错。`lcsc.py` 已把这些参数包好，自己直接拼 body 时要注意。
 
 另有两个环境坑：`*.lcsc.com` **不能走代理**（`lcsc.py` 已内置绕开）；淘宝结果空白多半是**登录态过期**，
 不是反爬。完整清单见 `references/channels.md` §7。

@@ -1,0 +1,2335 @@
+# =============================================================================
+# spec-rules.yaml — 元器件"指标对比 + 替代判定"机读规则库
+# 用途：BOM 配单/采购时，在指标允许范围内筛选可用料，再按价格/可得性排序。
+# 配套人读版：research/spec-rules.md（同一套规则的解释、推导与坑）
+# =============================================================================
+schema: bom-spec-rules
+version: 1
+generated: "2026-11-04"
+locale: zh-CN
+
+# -----------------------------------------------------------------------------
+# 0. 来源与可信度（每条规则/数值都带 conf 标记，程序可按 conf 做降级处理）
+# -----------------------------------------------------------------------------
+sources:
+  price:
+    name: 立创商城 szlcsc.com 自营现货价（含税）
+    method: 真人浏览器读取搜索结果页商品行，未调用任何第三方接口
+    sampled: "2026-11-04"
+    tiers_used: [100, 1000, 5000]     # 采样档位；实际下单价随数量阶梯变化
+    caveat: "价格为当日快照，仅作量级参考，采购前必须实测；不含运费/加工费/最小包装摊薄"
+  mall_params:
+    name: 立创商城商品行参数（可筛维度的实测依据）
+    method: 逐关键词抓取搜索结果前 N 行，记录每类目实际暴露的参数键
+    sampled: "2026-11-04"
+    caveat: "商品行参数是筛选面板的子集；筛选面板可能还有更多维度（待接口确认）"
+  standards:
+    - "IEC 60384-1 / -21 / -22（固定电容器通用、MLCC、电解）"
+    - "IEC 60115（固定电阻器）"
+    - "IEC 61000-4-5（浪涌，TVS 选型依据的测试波形 8/20us、10/1000us）"
+    - "JEDEC JESD22 / AEC-Q200（车规降额依据）"
+  datasheets:
+    - "Murata: Voltage characteristics of electrostatic capacitance（MLCC 直流偏压容值衰减）"
+    - "TDK: 电解电容器寿命 10℃2 倍定律（Arrhenius）"
+    - "TI/ADI/ST/onsemi 通用数据手册（器件 VM 示意图与极限参数）"
+
+confidence:
+  S:
+    label: 标准/手册规定
+    use: 可直接作为硬判据
+  D:
+    label: 厂家数据手册
+    use: 可直接作为硬判据（需注意测试条件）
+  M:
+    label: 商城实测（价格/库存/参数键）
+    use: 参考量级，会漂移
+  E:
+    label: 工程经验值
+    use: 作为默认余量/阈值，可被项目实测覆盖；使用时必须在报告里标 E
+
+# -----------------------------------------------------------------------------
+# 1. 全局降额与余量（默认策略；单品类可覆盖）
+# -----------------------------------------------------------------------------
+globals:
+  voltage_derating:
+    ceramic_mlcc_class2: 2.0      # X5R/X7R/Y5V 等 II 类：额定电压 >= 2x 工作电压（DC bias 衰减）
+    ceramic_mlcc_class1: 1.5      # C0G/NP0：>= 1.5x
+    electrolytic: 1.5             # 铝电解：>= 1.5x（含纹波峰值）
+    tantalum: 2.5                 # 钽电容：>= 2.5x（且必须 50% 以上电流降额，见品类）
+    film: 1.5
+    mosfet_vds: 1.5               # 常规；有感性尖峰时 2.0
+    diode_vr: 1.5
+    bjt_vceo: 1.5
+    ldo_vin: 1.2                  # 输入电压上限留 20%
+    conf: E
+  current_derating:
+    continuous_vs_rated: 2.0      # 长期连续电流 <= 0.5 额定
+    peak_vs_rated: 1.3            # 峰值 <= 额定/1.3
+    inductor_isat: 1.3            # Isat >= 1.3x 峰值电流
+    fuse_hold: 1.5                # 工作电流 <= 0.67 x Ihold
+    conf: E
+  power_derating:
+    resistor: 2.0                 # 额定功率 >= 2x 实际耗散
+    mosfet: 2.0                   # Pd 降额 50%
+    bjt: 2.0
+    conf: E
+  thermal:
+    tj_margin: 0.8                # 结温 <= 0.8 x Tj(max)
+    electrolytic_life_rule: "每降 10℃ 寿命翻倍（Arrhenius）"
+    conf: S
+  temperature_grade:
+    commercial: "0~70℃"
+    industrial: "-40~85℃"
+    extended: "-40~105℃"
+    automotive: "-40~125℃ (AEC-Q100/Q200)"
+    policy: "民用室温场景可放宽到 commercial；户外/工业必须 industrial 以上"
+    conf: E
+  preferred_values:
+    resistors: ["E24 优先，精密用 E96"]
+    capacitors: ["E6/E12（1.0 1.5 2.2 3.3 4.7 6.8 及其十倍）"]
+    conf: S
+  packaging_rules:
+    items:
+      - "SMT 优先 0603/0805 通用封装；0402 仅在高密度板且贴装能力具备时用"
+      - "同容值/同耐压优先选更小封装中价格更低者，但注意电压/电流能力随封装下降"
+      - "优先选 5000 个/圆盘等整盘包装；小批量走拆盘或管装会增加单价"
+    conf: E
+
+# -----------------------------------------------------------------------------
+# 2. 封装能力速查（跨品类；用于"能否换封装"以及功率/电流估算）
+# -----------------------------------------------------------------------------
+package_capability:
+  resistor:
+    "0201": {max_power: "50mW",  typical_current: "0.1A"}
+    "0402": {max_power: "63mW",  typical_current: "0.15A"}
+    "0603": {max_power: "100mW", typical_current: "0.25A"}
+    "0805": {max_power: "125mW", typical_current: "0.4A"}
+    "1206": {max_power: "250mW", typical_current: "0.6A"}
+    "1210": {max_power: "330mW", typical_current: "0.8A"}
+    "2010": {max_power: "500mW", typical_current: "1.0A"}
+    "2512": {max_power: "1W",    typical_current: "1.5A"}
+    conf: D
+    note: "以上为常见常规品上限，具体以厂家 datasheet 为准；大电流需合金/金属膜采样电阻"
+  mlcc_voltage_by_size:
+    "0402": "6.3~50V 常见"
+    "0603": "6.3~100V 常见"
+    "0805": "6.3~100V，10uF 通常在 25V 以下"
+    "1206": "6.3~200V"
+    "1210": "16~200V，22uF 常见"
+    conf: M
+  thermal_resistance:
+    "SOT-23": "~350~500℃/W"
+    "SOT-223": "~60~100℃/W"
+    "SOP-8": "~120~160℃/W"
+    "TO-252(DPAK)": "~40~60℃/W"
+    "DFN3x3": "~40~60℃/W（依赖 PCB 铜箔）"
+    conf: E
+  note: "Rθja 强依赖 PCB 铜面积，数据手册值多为 JEDEC 标准板；实际样品必须实测温升"
+
+# -----------------------------------------------------------------------------
+# 3. 筛选+打分算法（可直接照做的伪流程）
+# -----------------------------------------------------------------------------
+algorithm:
+  name: hard_filter_then_margin_then_price_rank
+  principle: "指标先定可用集合（集合外一律不参与比价），再在集合内按价格与可得性排序"
+  steps:
+    - id: S0_normalize
+      do: |
+        把 BOM 行规整为 requirement 结构：
+        {family, mpn?, params{}, qty, refdes[], board?, env?}
+        params 的键统一到本文件的 key（欧姆/法拉/伏/安/瓦/摄氏度/赫兹）
+      input_failure: "型号未知且必配参数不全 -> 转 S0b 反向选型"
+    - id: S0b_reverse_select
+      when: "只有功能描述，没有型号"
+      do: "用品类 default_parts 作为种子 -> 取参数区间 -> 走 S2 之后的正常流程"
+    - id: S1_family_resolve
+      do: |
+        型号已知：用 lcsc_category / mall_params 反推 family；
+        型号未知：人工（或 LLM）按功能关键词映射到 family。
+      guard: "family 判错会让后续所有规则失效 -> family 不确定时强制人工确认"
+    - id: S2_hard_filter
+      filters:
+        - category_match        # 类目必须同族
+        - package_capability    # 封装必须兼容（同封装或更大且允许改板）
+        - critical_all_pass     # critical 清单逐项判定，任一 fail -> 淘汰
+        - lifecycle             # 停售/EOL/无库存 -> 淘汰或降权
+        - env_grade             # 温度等级不得低于项目要求
+      output: candidates_A（硬约束可用集）
+    - id: S3_margin_check
+      do: |
+        对 deviations=gte/gte_margin 的参数套用 margin 系数：
+        pass 条件 = 候选额定值 / 需求实际值 >= margin
+        margin 缺失时用 globals 默认；任何一项不过 -> 淘汰并写 reason
+      output: candidates_B（含余量校验通过的可用集）
+    - id: S4_price_normalize
+      do: |
+        按需求数量命中阶梯价；计算 landed_unit_price =
+          阶梯单价 + 最小包装摊薄惩罚 + 运费分摊（若可算）
+        最小包装惩罚：qty < 包装数量时，等效单价 = 阶梯价 * 包装数 / qty
+        同一 MPN 多个 C 编号 -> 按 C 编号去重后取有货且最低价者
+    - id: S5_score
+      formula: |
+        score = w_price    * (1 - norm(landed_unit_price))
+              + w_stock    * stock_term
+              + w_hot      * hot_term
+              + w_supply   * multisupplier_term
+              - w_risk     * risk_penalty
+        stock_term      = clamp(log10(stock_qty)/6, 0, 1)     # 1KK+ 记 1.0
+        hot_term        = 有"近期成交100+单"/爆款标记? 1 : 0.5
+        multisupplier   = 该 MPN 在售品牌数>=2 ? 1 : 0.6
+        risk_penalty    = 风险标记数 * 0.15（涂标/散新/无数据手册/停售）
+      weights: {w_price: 0.50, w_stock: 0.20, w_hot: 0.12, w_supply: 0.08, w_risk: 0.10}
+    - id: S6_output
+      do: |
+        输出 topN（默认 3）+ 每项：
+          - rank / landed_unit_price / stock / 品牌 / C 编号
+          - reasons[]：为什么可用（逐条 critical 通过、余量倍数）
+          - diff{}：与原始料的逐项参数对比（含"更优/相同/更差"标注）
+          - flags[]：需人工确认项（未找到的参数、条件不一致、包装不符）
+      rule: "若 candidates_B 为空，禁止自动降价替代；必须回退到'原型号 + 更贵渠道'或人工确认"
+  scoring_guards:
+    - "价格权重不得超过 0.6：避免为了省几分钱选到不可靠渠道"
+    - "critical 参数不参与打分，只参与过滤：不容许'指标略差但很便宜'进入候选"
+    - "同 family 内跨封装比较必须计入改板成本，不能只比料价"
+  tie_breaks:
+    - "库存多者优先"
+    - "有数据手册者优先"
+    - "已在大货验证过的品牌优先（board history）"
+    - "封装更通用者优先（0603/0805 > 0402/0201）"
+
+# =============================================================================
+# 4. 品类规则
+#    每个 family 的字段含义：
+#      lcsc_category        商城类目（用于反推 family）
+#      mall_params_observed 商城商品行实际暴露的参数键（M，实测）
+#      mall_filter_extra    筛选面板补充维度（M）
+#      required_to_specify  做替代判定"最少"要给的参数（缺则必须反问）
+#      substitute_equivalence  同族等价判定（全部满足=可直接替换，品牌无关）
+#      critical             硬约束（不满足即不可用，不参与打分）
+#      conditional_critical 场景相关的收紧项
+#      relaxable            可放宽（用于换价格）
+#      upgrade_rules        可升级替代
+#      forbid_rules         绝对不可替代的情形
+#      price_band           实测价格带（M）
+#      default_parts        默认型号库（无型号时反向选型的种子）
+#      risk_notes           淘宝/散新常见坑与识别法
+# =============================================================================
+families:
+
+  # ---------------------------------------------------------------- 无源 ----
+  resistor:
+    display: 电阻
+    lcsc_category: [贴片电阻, 插件电阻, 排阻, 电流采样电阻/分流器]
+    mall_params_observed: [电阻类型, 阻值, 精度, 功率]
+    mall_filter_extra: [封装, 温度系数, 品牌, 包装, 认证信息]
+    required_to_specify: [resistance, package, tolerance, power_rating]
+    substitute_equivalence: "阻值等值 + 封装相同 + 功率>=原值 + 精度<=原值 = 可直接替换（品牌无关）"
+    critical:
+      - key: resistance
+        unit: ohm
+        cmp: value_equal
+        conf: S
+        note: "必须等值；E24/E96 就近舍入只能在明确告知后由人确认"
+      - key: package
+        unit: null
+        cmp: enum_equal_or_larger
+        conf: S
+        note: "同封装=免改板；更大封装需确认焊盘"
+      - key: power_rating
+        unit: W
+        cmp: gte_margin
+        margin: 2.0
+        conf: E
+        note: "额定功率 >= 2x 实际耗散（P=I^2*R）"
+      - key: tolerance
+        unit: percent
+        cmp: lte
+        conf: D
+        note: "候选精度必须不劣于原料；分压/反馈/基准回路<=0.5~1%"
+    conditional_critical:
+      - when: "精密分压 / 基准 / 电流检测"
+        keys: [tempco, tolerance, 电阻类型]
+        tighten: "tempco<=100ppm/℃（精密<=50）；tolerance<=0.5%；优先薄膜/合金而非厚膜"
+        conf: E
+      - when: "阻值 < 1Ω 或 采样电阻"
+        keys: [tempco, 电阻类型, power_rating]
+        tighten: "必须合金/金属膜（低 TCR，<=50ppm/℃），厚膜严禁用于分流"
+        conf: E
+      - when: "上拉/下拉/限流/RC 滤波（非精密）"
+        keys: [tolerance]
+        relax: "可放宽到 ±5%，甚至 ±10%（注意时序/电流波动）"
+        conf: E
+    relaxable:
+      - {key: brand, note: "同阻值同封装不同品牌价差可达 2~3x（实测 0805 1% 10k：0.0202 vs 0.013992）"}
+      - {key: packaging, note: "整盘 vs 拆盘，影响单价不影响功能"}
+      - {key: tolerance, note: "非精密场合 5% 可替 1%"}
+      - {key: 温度等级, note: "民用可 70℃ 级"}
+      - {key: tempco, note: "无温漂要求时可无视 100ppm 与 200ppm 的差别"}
+    upgrade_rules:
+      - {id: r_power_up, when: "实际耗散 > 50% 额定", do: "升一档封装（0805->1206）或换高功率系列", cost: "料价/占板面积增加"}
+      - {id: r_precision_up, when: "批量一致性差/温漂致漂移", do: "厚膜 -> 薄膜 0.1% 25ppm", cost: "5~20x 料价"}
+      - {id: r_free_upgrade, when: "更高功率/更高精度料恰好更便宜（国产替代）", do: "直接换，属免费升级", conf: E}
+    forbid_rules:
+      - "严禁用小功率电阻替代大功率（封装功率上限见 package_capability）"
+      - "严禁把厚膜电阻用于电流采样（TCR 大、噪声大）"
+      - "保险/熔断用途不得用普通电阻替代（无熔断特性，起不到保护）"
+      - "高压（>200V）回路不得跨封装降级，需查 datasheet 工作电压上限（常低于功率上限）"
+    price_band:
+      ref: "0805 1% 10kΩ 厚膜"
+      tiers_rmb: [{qty: 100, price: 0.0202}, {qty: 1000, price: 0.0154}, {qty: 5000, price: 0.0108}, {qty: 50000, price: 0.0085}]
+      budget_alt: "国产同规格 100 起 0.013992 / 5000 起 0.008712"
+      conf: M
+    default_parts:
+      - {mpn: "0805W8F1002T5E", brand: "UNI-ROYAL(厚声)", code: "C17414", spec: "0805 10kΩ ±1% 125mW", note: "通用基础库，供货最稳"}
+      - {mpn: "FRC0805F1002TS", brand: "FOJAN(富捷)", code: "C2907219", spec: "0805 10kΩ ±1% 125mW", note: "同规格更便宜，SMT 扩展库"}
+    risk_notes:
+      - "散新/翻新：电阻本体无丝印，最易被换料；靠 X-Ray 或阻值抽检难辨。选立创自营/有数据手册/近期成交多的行"
+      - "功率虚标：小厂 0805 标 250mW 实为 125mW 工艺；高功耗场合必须留 2x 余量"
+      - "阻值漂移：低价厚膜在高湿环境阻值漂移可达 1% 以上（硫化），含硫环境要用抗硫化系列"
+
+  capacitor_mlcc:
+    display: 陶瓷电容（MLCC）
+    lcsc_category: [贴片电容(MLCC), 直插独石电容(MLCC)]
+    mall_params_observed: [容值, 精度, 额定电压, 温度系数]
+    mall_filter_extra: [封装, 品牌, 包装]
+    required_to_specify: [capacitance, voltage_rating, dielectric, package, tolerance]
+    substitute_equivalence: "容值 + 耐压>= + 介质温度特性不劣 + 封装相同 = 可直接替换"
+    critical:
+      - key: capacitance
+        unit: F
+        cmp: value_equal
+        conf: S
+        note: "等值；去耦可按 -50%/+100% 放宽，定时/滤波/谐振回路必须等值"
+      - key: voltage_rating
+        unit: V
+        cmp: gte_margin
+        margin: 2.0
+        conf: S
+        note: |
+          II 类介质（X5R/X7R/Y5V）在额定电压下容值可掉 35~65%（EPCI 实测），
+          实测案例：1uF/6.3V X5R 加 3V DC 后仅剩 0.36uF（-64%）。
+          故 II 类必须 2x 降额；I 类（C0G/NP0）可用 1.5x。
+      - key: dielectric
+        unit: null
+        cmp: enum_order
+        order: ["C0G/NP0", "X7R", "X5R", "X6S", "Y5V", "Z5U"]
+        conf: S
+        note: "顺序=温度稳定性从好到差。只能同级或更好；Y5V/Z5U 不得替 X7R"
+      - key: package
+        unit: null
+        cmp: enum_equal
+        conf: S
+        note: "同容值同耐压时封装越大越贵；但小封装大容值 DC bias 衰减更严重"
+      - key: tolerance
+        unit: percent
+        cmp: lte
+        conf: D
+        note: "定时/谐振用 C0G ±5%（甚至 ±1%/±0.5%）；去耦 ±10~20% 均可"
+    conditional_critical:
+      - when: "定时 / 谐振 / 采样保持 / 高 Q 滤波"
+        keys: [dielectric, tolerance, tempco]
+        tighten: "必须 C0G(NP0)；容差 ±5% 或更好；不得用 II 类"
+        conf: S
+      - when: "开关电源输入/输出滤波"
+        keys: [额定纹波电流, ESR]
+        tighten: "查 datasheet 的允许纹波（MLCC 通常足够，但仍要核算温升）"
+        conf: E
+      - when: "高压（>100V）"
+        keys: [voltage_rating, 封装]
+        tighten: "注意 MLCC 高压型的容值-电压曲线与开裂风险，需 2x 以上且避开 1206 以上大尺寸急冷"
+        conf: E
+    relaxable:
+      - {key: brand, note: "同规格国产 vs 日系价差 1.5~2.5x（10uF/25V/0805：0.2574 vs 0.194275）"}
+      - {key: tolerance, note: "去耦场合 ±20% 无损"}
+      - {key: dielectric, note: "去耦允许 X5R 替 X7R（温漂范围小差异）"}
+      - {key: packaging, note: "无影响"}
+    upgrade_rules:
+      - {id: c_volt_up, when: "DC bias 导致有效容值不足", do: "升耐压（6.3V->16V/25V）或升封装（0603->0805）", cost: "料价/面积"}
+      - {id: c_diel_up, when: "温漂/容量稳定性要求高", do: "X7R -> C0G", cost: "同容值下体积大 3~10 倍、价格 3~10 倍"}
+      - {id: c_parallel, when: "单颗容值/ESR 不够", do: "多颗并联（同时降低 ESL/ESR）", cost: "贴装点数"}
+    forbid_rules:
+      - "Y5V/Z5U 严禁用于任何有稳定性要求的场合（-80% 容值 + 强 DC bias）"
+      - "定时/振荡回路严禁用 II 类介质替代 C0G"
+      - "高压场合严禁用低耐压替代，即使实测电压看起来不高（需计浪涌/振铃）"
+      - "严禁按标称容值当有效容值：必须按工作电压查 DC bias 曲线"
+    price_band:
+      ref: "0805 10uF/25V X5R ±10%"
+      tiers_rmb: [{qty: 20, price: 0.2574}, {qty: 200, price: 0.206}, {qty: 2000, price: 0.1578}]
+      budget_alt: "国产 20 起 0.194275 / 3000 起 0.112195"
+      ref2: "0603 100nF/50V X7R ±10%"
+      tiers2_rmb: [{qty: 100, price: 0.025}, {qty: 1000, price: 0.0193}, {qty: 8000, price: 0.013}]
+      conf: M
+    default_parts:
+      - {mpn: "CL21A106KAYNNNE", brand: "SAMSUNG(三星)", code: "C15850", spec: "0805 10uF ±10% 25V X5R", note: "大厂通用料，库存 861K+"}
+      - {mpn: "HGC0805R5106K250NSLJ", brand: "Chinocera(华瓷)", code: "C19103847", spec: "0805 10uF ±10% 25V X5R", note: "国产低价替代"}
+      - {mpn: "CSA0603X7R104K500JT", brand: "HRE(芯声)", code: "C3012381", spec: "0603 100nF ±10% 50V X7R", note: "0.1uF 主力去耦料"}
+      - {mpn: "FCC0603B104K500CT", brand: "FOJAN(富捷)", code: "C5137636", spec: "0603 100nF ±10% 50V X7R", note: "0.1uF 低价位"}
+    risk_notes:
+      - "翻新/散新：MLCC 外观全同，最易被以次充好（尤其大容值高耐压）。优先有数据手册 + 原厂包装 + 近期成交标记"
+      - "参数虚标：低价 10uF/25V 0805 实为 10uF/16V 或容值不足，DC bias 下差距更大；关键位建议抽测容值"
+      - "丝印/批次磨改：大容值 MLCC 无标称印字，无法目视核对 -> 只能靠渠道"
+      - "开裂：手工焊接/弯板易裂，返修过的板子容值可能已失效（漏电增大）"
+
+  capacitor_electrolytic:
+    display: 铝电解电容
+    lcsc_category: [贴片铝电解电容, 直插铝电解电容]
+    mall_params_observed: [容值, 精度, 额定电压, 纹波电流]
+    mall_filter_extra: [封装/尺寸, 品牌, 工作温度, 寿命]
+    required_to_specify: [capacitance, voltage_rating, ripple_current, esr, size]
+    substitute_equivalence: "容值 + 耐压>= + 尺寸可装 + 纹波电流>=原值 = 可替换（需查寿命）"
+    critical:
+      - key: capacitance
+        unit: F
+        cmp: gte
+        conf: S
+        note: "滤波场合容值可放大（-20% 以内可接受，不可大幅减小）"
+      - key: voltage_rating
+        unit: V
+        cmp: gte_margin
+        margin: 1.5
+        conf: E
+        note: "含纹波峰值；高温环境建议 1.5~2x"
+      - key: ripple_current
+        unit: A
+        cmp: gte_margin
+        margin: 1.5
+        conf: E
+        note: "纹波电流不达标=发热=寿命骤降；这是最常被忽略的替代失效点"
+      - key: size
+        unit: mm
+        cmp: enum_compatible
+        conf: S
+        note: "直径/高度/引脚间距必须能装（插件尤其严格）"
+      - key: esr
+        unit: ohm
+        cmp: lte
+        conf: D
+        note: "开关电源场合 ESR 必须不劣于原值（低频滤波可放宽）"
+    conditional_critical:
+      - when: "开关电源输出滤波 / 大纹波场合"
+        keys: [ripple_current, esr, 寿命]
+        tighten: "必须低 ESR 系列（固态/低阻），普通品会过热鼓包"
+        conf: E
+      - when: "高温环境或长寿命要求"
+        keys: [寿命, 工作温度]
+        tighten: "选 105℃/5000h 以上；寿命按 10℃2 倍定律折算"
+        conf: S
+    relaxable:
+      - {key: brand, note: "国产 vs 日系价差 1.3~3x；国产常规品用于非关键位足够"}
+      - {key: tolerance, note: "±20% 是常态，不必苛求"}
+      - {key: 尺寸, note: "板上空间允许时可用更大尺寸换更长寿命（便宜且更耐用）"}
+    upgrade_rules:
+      - {id: e_life_up, when: "长期高温工作", do: "105℃ -> 125℃ 或 2000h -> 5000h 系列", cost: "料价 1.2~2x"}
+      - {id: e_esr_up, when: "纹波大/发热", do: "普通品 -> 低 ESR / 固态聚合物", cost: "2~5x"}
+      - {id: e_cap_up, when: "容值余量不足", do: "升一档容值或并联", cost: "空间"}
+    forbid_rules:
+      - "极性绝对不可反（反接=爆浆），替代时确认封装极性标记一致"
+      - "严禁用普通 85℃ 品替代 105℃ 品用于电源输出"
+      - "严禁用低纹波电流品替代，即使容值耐压都够（会过热失效）"
+      - "禁止替代时忽略安装高度（贴片电解高体在屏蔽罩下会顶壳）"
+    price_band:
+      ref: "100uF/25V 贴片/插件常规"
+      tiers_rmb: [{qty: 10, price: 0.2228}, {qty: 100, price: 0.1822}, {qty: 1000, price: 0.132088}]
+      note: "纹波 88mA@120Hz；大容值/低 ESR/高温型价格显著上浮"
+      conf: M
+    default_parts:
+      - {mpn: "RST100UF25V004", brand: "KNSCHA(科尼盛)", code: "C4747964", spec: "100uF ±20% 25V 纹波88mA@120Hz", note: "常规滤波用"}
+      - {mpn: "JVJ25V100M6x5", brand: "JIERR(捷而瑞)", code: "C46550402", spec: "100uF ±20% 25V 6x5mm", note: "同规格备选"}
+    risk_notes:
+      - "翻新：拆机电解电容重新套皮/打字最常见（外观全新但已老化）。识别：引脚有焊锡残留、套管字迹模糊/歪斜、批次号与日期矛盾"
+      - "假低 ESR：标称低阻实为普通品，电源上会鼓包。关键位要求提供 datasheet 与系列料号"
+      - "容量虚标：小体积标高容值，实测容值常不足 60%"
+      - "寿命陷阱：85℃ 1000h 品在 45℃ 环境折算约 16000h（约 2 年），长期产品必须按 10℃2 倍定律算够"
+
+  capacitor_tantalum:
+    display: 钽电容（含聚合物钽）
+    lcsc_category: [钽电容]
+    mall_params_observed: [容值, 精度, 额定电压, 等效串联电阻(ESR)]
+    mall_filter_extra: [封装(CASE-A/B/C/D), 品牌]
+    required_to_specify: [capacitance, voltage_rating, esr, case_size]
+    substitute_equivalence: "容值 + 耐压 + CASE 尺寸相同 + ESR 不劣 = 可替换"
+    critical:
+      - key: voltage_rating
+        unit: V
+        cmp: gte_margin
+        margin: 2.5
+        conf: S
+        note: |
+          钽电容必须 2.5x 以上降额（业界常规要求 50% 电压降额，浪涌场合更低）。
+          失效模式是短路，可能起火，是最不能省余量的品类。
+      - key: capacitance
+        unit: F
+        cmp: value_equal
+        conf: S
+      - key: esr
+        unit: ohm
+        cmp: lte
+        conf: D
+        note: "ESR 高的钽在纹波下发热；聚合物钽 ESR 低一个数量级"
+      - key: case_size
+        unit: null
+        cmp: enum_equal
+        conf: S
+        note: "CASE-A/B/C/D 与 3216/3528/6032/7343 焊盘不同"
+    conditional_critical:
+      - when: "上电浪涌/热插拔/低阻抗电源"
+        keys: [voltage_rating]
+        tighten: "降额到 3x 或用聚合物钽/固态铝；普通钽在低阻源下易击穿"
+        conf: E
+    relaxable:
+      - {key: brand, note: "国产（湘怡中元等）vs AVX/Kemet 价差约 1.7x（10uF/16V CASE-A：0.9633 vs 0.5567）"}
+      - {key: tolerance, note: "±20% 常见，不必强求 ±10%"}
+    upgrade_rules:
+      - {id: t_poly, when: "低 ESR/高可靠要求", do: "普通钽 -> 聚合物钽（POSCAP）", cost: "2~4x"}
+      - {id: t_volt_up, when: "浪涌风险", do: "升耐压到 3x", cost: "1.3~2x、体积增大"}
+    forbid_rules:
+      - "严禁电压降额不足 2x"
+      - "严禁在低阻抗电源上直接用普通钽替代低 ESR 聚合物钽"
+      - "极性反接必失效；替代时确认 CASE 极性标记"
+    price_band:
+      ref: "10uF/16V CASE-A"
+      tiers_rmb: [{qty: 20, price: 0.9633}, {qty: 60, price: 0.843}, {qty: 200, price: 0.7356}]
+      budget_alt: "国产 50 起 0.5567 / 500 起 0.4891"
+      conf: M
+    default_parts:
+      - {mpn: "TAJA106K016RNJ", brand: "Kyocera AVX", code: "C7171", spec: "10uF ±10% 16V ESR 3Ω@100kHz CASE-A", note: "国际品牌基准"}
+      - {mpn: "CA45-A016K106T", brand: "湘怡中元/湘江", code: "C119051", spec: "10uF ±10% 16V ESR 3Ω CASE-A", note: "国产替代，价格约 60%"}
+    risk_notes:
+      - "翻新/散新：钽电容拆机后打磨重印极常见，标识易被磨掉（CASE 上只有一条极性带）"
+      - "电压虚标：低价品标 16V 实为 10V，浪涌下直接短路冒烟"
+      - "识别：正常钽表面平整无划痕；打磨痕迹呈雾状；批次一致性差"
+
+  inductor:
+    display: 电感（功率电感/贴片电感）
+    lcsc_category: [贴片电感, 功率电感, 一体成型电感]
+    mall_params_observed: [电感值, 精度, 额定电流, 饱和电流(Isat), 直流电阻(DCR)]
+    mall_filter_extra: [封装/尺寸, 品牌, 屏蔽形式]
+    required_to_specify: [inductance, isat, dc_resistance, rated_current, size]
+    substitute_equivalence: "电感值相同 + Isat>= + DCR<= + 尺寸可装 = 可替换（屏蔽性需确认）"
+    critical:
+      - key: inductance
+        unit: H
+        cmp: value_equal_tol
+        conf: S
+        note: "等值；DCDC 中电感值变化会改纹波与稳定性，±20% 内可接受，需复核环路"
+      - key: isat
+        unit: A
+        cmp: gte_margin
+        margin: 1.3
+        conf: E
+        note: |
+          Isat 是"电感量下降 20~30%"的电流，不是烧毁电流。
+          Buck 中峰值电流 = Iout + ΔIL/2，Isat 必须 >= 1.3x 该峰值。
+      - key: dc_resistance
+        unit: ohm
+        cmp: lte
+        conf: D
+        note: "DCR 直接决定铜损 I^2R；大电流场合 DCR 升高=过热"
+      - key: rated_current
+        unit: A
+        cmp: gte_margin
+        margin: 1.2
+        conf: E
+        note: "额定电流（温升 40K 定义）与 Isat 是两回事，必须都满足"
+      - key: size
+        unit: null
+        cmp: enum_compatible
+        conf: S
+    conditional_critical:
+      - when: "DCDC 功率回路"
+        keys: [isat, dc_resistance, 屏蔽]
+        tighten: "优先一体成型/屏蔽式（漏磁小），计算温升"
+        conf: E
+      - when: "EMC 敏感 / 靠近信号线"
+        keys: [屏蔽]
+        tighten: "必须屏蔽式"
+        conf: E
+    relaxable:
+      - {key: brand, note: "国产 vs 日系 1.2~2x"}
+      - {key: tolerance, note: "±20% 可接受（部分料 ±10% 更贵但没必要）"}
+      - {key: 封装, note: "空间允许时更大封装 DCR 更低、更便宜"}
+    upgrade_rules:
+      - {id: l_isat_up, when: "峰值电流接近 Isat", do: "升尺寸或升 Isat 型号", cost: "体积/价格"}
+      - {id: l_shield, when: "EMI 整改", do: "绕线 -> 一体成型屏蔽", cost: "1.2~2x"}
+    forbid_rules:
+      - "严禁只看额定电流不看 Isat（很多低价料额定电流标得很好看，Isat 却很低）"
+      - "严禁用非屏蔽电感替代屏蔽电感用于高密度板"
+      - "严禁在谐振/滤波场合用电感值偏差大的料（会偏频）"
+    price_band:
+      ref: "CD32 10uH 贴片功率电感"
+      tiers_rmb: [{qty: 10, price: 0.2713}, {qty: 100, price: 0.2185}, {qty: 300, price: 0.1921}]
+      budget_alt: "20 起 0.180405 / 600 起 0.11837（Isat 950mA, DCR 286mΩ）"
+      conf: M
+    default_parts:
+      - {mpn: "CD32YP0302-100M", brand: "YJYCOIN(益嘉源)", code: "C492261", spec: "10uH ±20% 1A DCR 342mΩ", note: "常规小功率"}
+      - {mpn: "MSCD32-100KT", brand: "MetalLions(美铼)", code: "C915150", spec: "10uH ±10% Isat 950mA DCR 286mΩ", note: "参数更全、更便宜"}
+    risk_notes:
+      - "参数虚标：低价功率电感 Isat 虚标最严重（标 3A 实际 1.5A 就软饱和）。大电流设计必须实测或选大厂"
+      - "DCR 虚标：小厂 DCR 常比标称高 30%~100%，铜损翻倍"
+      - "翻新：拆机电感脚上有锡、漆包线发黑"
+      - "识别：正规品有清晰的感值/公差印字；一体成型看压制密度与电极镀层"
+
+  ferrite_bead:
+    display: 磁珠
+    lcsc_category: [磁珠]
+    mall_params_observed: [阻抗@频率, 误差, 直流电阻(DCR), 额定电流]
+    mall_filter_extra: [封装, 品牌]
+    required_to_specify: [impedance_at_100mhz, rated_current, dc_resistance, size]
+    substitute_equivalence: "阻抗@100MHz 相同量级 + 额定电流>= + 尺寸相同 = 可替换"
+    critical:
+      - key: impedance_at_100mhz
+        unit: ohm
+        cmp: gte_margin
+        margin: 1.0
+        conf: D
+        note: "磁珠靠阻抗吸收高频噪声；阻抗不足=滤波失效。注意阻抗曲线，不只看 100MHz 点"
+      - key: rated_current
+        unit: A
+        cmp: gte_margin
+        margin: 1.3
+        conf: E
+        note: "超过额定电流后磁珠饱和，阻抗骤降，同时 DCR 发热"
+      - key: dc_resistance
+        unit: ohm
+        cmp: lte
+        conf: E
+        note: "电源线上磁珠 DCR 引起压降，大电流时要注意（如 2A x 50mΩ = 0.1V）"
+      - key: size
+        unit: null
+        cmp: enum_equal
+        conf: S
+    conditional_critical:
+      - when: "信号线（USB/差分/时钟）"
+        keys: [阻抗@频率, 阻抗曲线]
+        tighten: "需查曲线在高频段（数百 MHz~GHz）仍有阻抗；大电流磁珠不适合信号线"
+        conf: E
+    relaxable:
+      - {key: brand, note: "村田/TDK vs 国产 1.5~2x"}
+      - {key: 误差, note: "±25% 是常态，不必苛求"}
+    upgrade_rules:
+      - {id: b_imp_up, when: "EMI 超限", do: "升阻抗等级或改共模电感", cost: "1~2x"}
+    forbid_rules:
+      - "严禁用磁珠替代 0Ω 电阻用于大电流通路（DCR + 饱和）"
+      - "严禁在需要直流通过的电源线上用高阻抗磁珠而不核算压降"
+      - "磁珠不能替代去耦电容，两者作用不同"
+    price_band:
+      ref: "0603 磁珠 120Ω@100MHz 2A"
+      tiers_rmb: [{qty: 50, price: 0.0834}, {qty: 500, price: 0.0637}, {qty: 1500, price: 0.0549}]
+      ref2: "220Ω@100MHz 2.2A"
+      tiers2_rmb: [{qty: 10, price: 0.1233}, {qty: 100, price: 0.0965}]
+      conf: M
+    default_parts:
+      - {mpn: "BLM18PG121SN1D", brand: "muRata(村田)", code: "C14709", spec: "0603 120Ω@100MHz ±25% DCR 50mΩ 2A", note: "电源线通用"}
+      - {mpn: "MPZ1608S221ATA00", brand: "TDK", code: "C76815", spec: "0603 220Ω@100MHz ±25% 2.2A", note: "信号线/低频段"}
+    risk_notes:
+      - "假磁珠：实为 0Ω 电阻或普通电感，阻抗几乎为零。识别：拿万用表量直流电阻（应在几十 mΩ）、或用阻抗分析仪"
+      - "阻抗虚标：低频段阻抗虚高，高频段没有。要求提供阻抗-频率曲线"
+      - "翻新：拆机磁珠镀层发暗、端头有锡"
+
+  # ------------------------------------------------------------ 分立器件 ----
+  diode_rectifier:
+    display: 整流二极管
+    lcsc_category: [通用二极管, 整流桥]
+    mall_params_observed: [二极管配置, 正向压降(Vf), 直流反向耐压(Vr), 整流电流]
+    mall_filter_extra: [封装, 品牌, 恢复时间]
+    required_to_specify: [vr, if_avg, package, vf]
+    substitute_equivalence: "Vr>= + If>= + 封装相同 + 恢复时间不劣 = 可替换"
+    critical:
+      - key: vr
+        unit: V
+        cmp: gte_margin
+        margin: 1.5
+        conf: E
+        note: "反向耐压 >= 1.5x 最高反向电压（含振铃尖峰，感性负载取 2x）"
+      - key: if_avg
+        unit: A
+        cmp: gte_margin
+        margin: 1.5
+        conf: E
+        note: "平均整流电流；注意正弦整流时 If_avg 与实际负载电流的关系，峰值电流另算"
+      - key: vf
+        unit: V
+        cmp: lte
+        conf: D
+        note: "正向压降决定损耗 P=Vf*If；低压输出场合差异显著"
+      - key: package
+        unit: null
+        cmp: enum_compatible
+        conf: S
+      - key: trr
+        unit: s
+        cmp: lte
+        conf: D
+        note: "高频整流/开关电源必须用快恢复；工频整流可用慢恢复（更便宜）"
+    relaxable:
+      - {key: brand, note: "实测同规格 1N4007 价差 7x（onsemi 0.2789@100 vs 国产 0.044@500）"}
+      - {key: 封装, note: "SMA/SMB/SMC 同族，功率上浮可换更大"}
+      - {key: vf, note: "非低压/非高效场合可放宽 0.2V"}
+    upgrade_rules:
+      - {id: dr_fast, when: "高频/开关电源", do: "标准恢复 -> 快恢复/超快恢复", cost: "1.5~3x"}
+      - {id: dr_volt, when: "感性负载/浪涌", do: "升 Vr 一档", cost: "1.1~1.5x"}
+    forbid_rules:
+      - "严禁用慢恢复管替代快恢复管用于开关电源续流/整流"
+      - "严禁 Vr 降额不足；市电整流必须 >= 600V（220V 峰值 311V，常用 1N4007 1kV）"
+    price_band:
+      ref: "1N4007 DO-41 1A/1kV"
+      tiers_rmb: [{qty: 10, price: 0.3551}, {qty: 100, price: 0.2789}, {qty: 1000, price: 0.2122}]
+      budget_alt: "国产 1N4007W(SOD-123) 50 起 0.0553 / 6000 起 0.029545"
+      conf: M
+    default_parts:
+      - {mpn: "1N4007", brand: "onsemi/国产", code: "C53568(onsemi) / C18199088(R+O)", spec: "1A 1kV Vf 0.93~1V", note: "工频整流万能料"}
+      - {mpn: "1N4148W", brand: "VISHAY / R+O", code: "C241939 / C7420318", spec: "150mA 75~100V SOD-123", note: "小信号开关管"}
+    risk_notes:
+      - "翻新：玻封/塑封二极管打磨重印最常见，价差异常大（正品 0.28 vs 散新 0.03）"
+      - "1N4007 假货：耐压实为 100V~400V，市电直接击穿。识别：正向压降偏低、反向漏电大（用兆欧表/耐压仪抽测）"
+      - "识别法：正规品丝印清晰、本体一致；散新批次混料、引脚氧化"
+
+  diode_schottky:
+    display: 肖特基二极管
+    lcsc_category: [肖特基二极管]
+    mall_params_observed: [二极管配置, 正向压降(Vf), 直流反向耐压(Vr), 整流电流]
+    mall_filter_extra: [封装, 品牌, 反向漏电流]
+    required_to_specify: [vr, if_avg, vf, package]
+    substitute_equivalence: "Vr>= + If>= + Vf<= + 封装相同 = 可替换"
+    critical:
+      - key: vr
+        unit: V
+        cmp: gte_margin
+        margin: 1.5
+        conf: E
+        note: "肖特基反向漏电随温度剧增，高温场合要 2x 降额"
+      - key: if_avg
+        unit: A
+        cmp: gte_margin
+        margin: 1.5
+        conf: E
+      - key: vf
+        unit: V
+        cmp: lte
+        conf: D
+        note: "低压大电流场合 Vf 直接决定效率；注意 Vf 的测试电流条件（@3A vs @1A 不可比）"
+      - key: package
+        unit: null
+        cmp: enum_compatible
+        conf: S
+      - key: ir_reverse_leakage
+        unit: A
+        cmp: lte
+        conf: D
+        note: "高温下漏电可放大 100 倍，低功耗待机回路尤其致命"
+    relaxable:
+      - {key: brand, note: "实测 SS34 价差 15x（onsemi 1.7@100 vs 国产 0.1799@200）"}
+      - {key: vf, note: "非电池/低功耗场合放宽 0.1~0.2V"}
+    upgrade_rules:
+      - {id: s_lowvf, when: "低压大电流/效率敏感", do: "标准肖特基 -> 低 Vf 型号或同步整流/理想二极管", cost: "2~10x"}
+      - {id: s_vr, when: "高温/高反向电压", do: "升 Vr（注意 Vf 会变大）", cost: "1.2~2x"}
+    forbid_rules:
+      - "严禁用肖特基替代快恢复用于 >150℃ 环境（漏电失控）"
+      - "严禁耐压不足（肖特基对反向过压极敏感，一次击穿即短路）"
+      - "严禁在需要低漏电的电池回路用普通肖特基（待机电流会翻倍）"
+    price_band:
+      ref: "SS34 SMA 3A/40V"
+      tiers_rmb: [{qty: 10, price: 2.37}, {qty: 100, price: 1.7}]
+      budget_alt: "国产 20 起 0.2166 / 5000 起 0.111055（Vf 550mV@3A）"
+      conf: M
+    default_parts:
+      - {mpn: "SS34", brand: "onsemi(安森美)", code: "C154551", spec: "40V 3A Vf 500mV@3A SMA", note: "标准基准"}
+      - {mpn: "SS34", brand: "R+O(宏嘉诚)", code: "C7420365", spec: "40V 3A Vf 550mV@3A", note: "国产低价，约 1/10 价"}
+      - {mpn: "SS14/SS24/SS54", brand: "通用", code: "—", spec: "1A/2A/5A 40V 谱系", note: "按电流选型"}
+    risk_notes:
+      - "假 SS34：实为 SS14/SS24 重印（耐流不足），大电流下发热烧毁。识别：Vf 偏高、结温测试超温"
+      - "Vf 虚标：低价料 Vf 标 0.3V 实测 0.6V"
+      - "翻新：SMA 本体小、丝印易磨，拆机品难辨；靠渠道与价格异常识别"
+
+  diode_zener:
+    display: 稳压二极管
+    lcsc_category: [稳压二极管]
+    mall_params_observed: [二极管配置, 稳压值(标称值), 反向电流(Ir), 稳压值(范围值)]
+    mall_filter_extra: [封装, 功率, 品牌]
+    required_to_specify: [vz, power, tolerance, package]
+    substitute_equivalence: "Vz 范围重叠 + 功率>= + 封装相同 = 可替换"
+    critical:
+      - key: vz
+        unit: V
+        cmp: range_contains
+        conf: D
+        note: "必须用 Vz 范围值判断（如 5.1V 的 4.8~5.4V），标称值相同不代表范围相同"
+      - key: power
+        unit: W
+        cmp: gte_margin
+        margin: 2.0
+        conf: E
+        note: "稳压管常工作在临界状态，功率必须 2x；同时算 Iz=(Vin-Vz)/R 是否超额定"
+      - key: package
+        unit: null
+        cmp: enum_compatible
+        conf: S
+      - key: iz_min
+        unit: A
+        cmp: lte
+        conf: D
+        note: "最小工作电流 Izmin 决定空载能否稳压（低 Izmin 的料更贵）"
+    conditional_critical:
+      - when: "精密基准/ADC 基准"
+        keys: [vz, 温度系数, 动态电阻]
+        tighten: "用 <5.6V 或带温补的基准（如 TL431），普通稳压管温漂 ±5mV/℃"
+        conf: E
+    relaxable:
+      - {key: brand, note: "实测 BZX84C5V1 价差 2.2x（onsemi 0.196@200 vs 国产 0.0872@500）"}
+      - {key: 精度, note: "非基准场合 ±5% 足够"}
+    upgrade_rules:
+      - {id: z_precision, when: "需要高精度稳压", do: "稳压管 -> TL431/基准 IC", cost: "1.5~5x"}
+    forbid_rules:
+      - "严禁用 Vz 标称值相同但范围更宽的料替代精密回路"
+      - "严禁功率降额不足（稳压管过热即失效短路）"
+      - "严禁反向使用（稳压管正向就是普通二极管）"
+    price_band:
+      ref: "BZX84C5V1 SOT-23 5.1V"
+      tiers_rmb: [{qty: 20, price: 0.2472}, {qty: 200, price: 0.196}]
+      budget_alt: "国产 50 起 0.1124 / 3000 起 0.0733"
+      conf: M
+    default_parts:
+      - {mpn: "BZX84C5V1", brand: "onsemi / R+O", code: "C47075 / C19077468", spec: "5.1V 4.8~5.4V SOT-23", note: "通用稳压/钳位"}
+      - {mpn: "BZT52C3V3", brand: "通用", code: "—", spec: "3.3V SOD-123", note: "3.3V 系统钳位"}
+    risk_notes:
+      - "翻新：SOT-23 打磨重印最多，且不同 Vz 外观相同，极易混料（我曾见 5.1V 标成 3.3V）"
+      - "识别：抽测 Vz（恒流源 + 万用表），关键位必须抽检"
+      - "功率虚标：小厂 SOT-23 标 500mW 实为 200mW"
+
+  tvs_esd:
+    display: TVS / ESD 保护
+    lcsc_category: [瞬态抑制二极管(TVS), ESD保护器件]
+    mall_params_observed: [极性, 反向工作电压(Vrwm), 钳位电压, 峰值脉冲电流(Ipp)]
+    mall_filter_extra: [封装, 结电容, 品牌, 通道数]
+    required_to_specify: [vrwm, vclamp, ipp, 极性, package]
+    substitute_equivalence: "Vrwm>=工作电压 + Vclamp<=被保护器件耐压 + Ipp>= + 极性相同 = 可替换"
+    critical:
+      - key: vrwm
+        unit: V
+        cmp: gte
+        conf: D
+        note: |
+          Vrwm 必须 >= 被保护线路的最高工作电压（含容差），否则正常工作时漏电/发热。
+          常用 5V 系统选 5.0V 或 5.5V；12V 系统选 12~13V。
+      - key: vclamp
+        unit: V
+        cmp: lte
+        conf: D
+        note: "钳位电压必须 < 被保护 IC 的绝对最大额定（留 20% 余量），这是 TVS 选型第一约束"
+      - key: ipp
+        unit: A
+        cmp: gte
+        conf: D
+        note: "峰值脉冲电流需覆盖预期浪涌（8/20us 或 10/1000us 波形，测试条件不可混比）"
+      - key: polarity
+        unit: null
+        cmp: enum_equal
+        conf: S
+        note: "单向/双向不可互换：直流线路用单向，交流/差分信号用双向"
+      - key: capacitance
+        unit: F
+        cmp: lte
+        conf: D
+        note: "高速信号线（USB/HDMI/CAN）必须用低容 TVS（<1pF~5pF），否则信号畸变"
+    relaxable:
+      - {key: brand, note: "实测 SMBJ5.0A 价差 2.6x（Littelfuse 0.5297@50 vs 国产 0.2877@10）"}
+      - {key: 封装, note: "SMA/SMB/SMC 按能量选"}
+      - {key: ipp, note: "室内低浪涌环境可放宽"}
+    upgrade_rules:
+      - {id: t_energy, when: "户外/雷击/长线", do: "升功率等级（SMA->SMB->SMC）或加两级保护", cost: "1.5~3x"}
+      - {id: t_lowcap, when: "高速信号", do: "普通 TVS -> 低容 ESD 阵列", cost: "2~5x"}
+    forbid_rules:
+      - "严禁 Vrwm 低于线路工作电压（会持续漏电/发热）"
+      - "严禁钳位电压高于被保护 IC 耐压"
+      - "严禁单向替双向用于交流/差分线"
+      - "严禁在 USB3/HDMI 等高速线上用高容 TVS"
+    price_band:
+      ref: "SMBJ5.0A SMB 5V 单向"
+      tiers_rmb: [{qty: 5, price: 0.6617}, {qty: 50, price: 0.5297}]
+      budget_alt: "国产 10 起 0.2877 / 300 起 0.2001"
+      note: "Vrwm 5V / 钳位 9.2V / Ipp 65.3A"
+      conf: M
+    default_parts:
+      - {mpn: "SMBJ5.0A", brand: "Littelfuse(力特)", code: "C83333", spec: "5V 单向 钳位9.2V Ipp65.3A SMB", note: "电源/接口基准"}
+      - {mpn: "SMBJ5.0A", brand: "R+O(宏嘉诚)", code: "C19077558", spec: "5V 单向 Ipp 65.22A@10/1000us", note: "国产低价"}
+      - {mpn: "SRV05-4 / USBLC6-2SC6", brand: "通用", code: "—", spec: "低容 ESD 阵列", note: "USB/信号线专用"}
+    risk_notes:
+      - "假 TVS：实为普通稳压管重印（能量吸收能力差一个数量级），浪涌一来就烧"
+      - "参数虚标：Ipp 严重虚标（标 65A 实测十几 A）"
+      - "识别：TVS 结电容大（普通管小）、Vbr 与 Vrwm 比值约 1.1~1.2；关键位建议用浪涌发生器抽测"
+
+  bjt:
+    display: 三极管（BJT）/ 数字晶体管
+    lcsc_category: [三极管(BJT), 数字晶体管]
+    mall_params_observed: [晶体管类型, 集电极电流(Ic), 集射极击穿电压(Vceo), 耗散功率(Pd)]
+    mall_filter_extra: [封装, 品牌, hFE 档位]
+    required_to_specify: [type_npn_pnp, vceo, ic, pd, package]
+    substitute_equivalence: "类型(NPN/PNP)相同 + Vceo>= + Ic>= + 封装相同 = 可替换（hFE 需够用）"
+    critical:
+      - key: transistor_type
+        unit: null
+        cmp: enum_equal
+        conf: S
+        note: "NPN/PNP 不可互换（电路拓扑相反）"
+      - key: vceo
+        unit: V
+        cmp: gte_margin
+        margin: 1.5
+        conf: E
+        note: "Vceo >= 1.5x 实际集电极电压；感性负载（继电器/电机）取 2x"
+      - key: ic
+        unit: A
+        cmp: gte_margin
+        margin: 1.5
+        conf: E
+      - key: pd
+        unit: W
+        cmp: gte_margin
+        margin: 2.0
+        conf: E
+      - key: package
+        unit: null
+        cmp: enum_compatible
+        conf: S
+      - key: hfe
+        unit: null
+        cmp: gte
+        conf: D
+        note: "驱动继电器/LED 时需核算 Ib >= Ic/hFE(min)；hFE 分档（O/Y/GR）不能降档"
+    relaxable:
+      - {key: brand, note: "国产 vs 原厂 2~5x"}
+      - {key: hFE 上限, note: "hFE 过高反而易振荡/漏电，够用即可"}
+      - {key: 封装, note: "SOT-23 可换 SOT-323（焊盘需确认）"}
+    upgrade_rules:
+      - {id: bjt_digital, when: "需要简化外围（省基极电阻）", do: "用数字晶体管（内置偏置电阻）", cost: "持平或略贵"}
+      - {id: bjt_mos, when: "大电流/低驱动损耗", do: "BJ支 -> MOSFET", cost: "持平，但需注意驱动电压"}
+    forbid_rules:
+      - "严禁 NPN/PNP 互换"
+      - "严禁 Vceo/Ic 降额不足用于感性负载"
+      - "严禁用普通 BJT 替代达林顿/数字晶体管（驱动能力差 100 倍）"
+    price_band:
+      ref: "S8050/S8550 SOT-23"
+      note: "采样时该类目主力料显示'商品已停售'，说明廉价通孔/BJT 老料存在 EOL 风险，采购前必须查在售状态"
+      tiers_rmb: [{qty: 100, price: 0.02}]
+      conf: M
+    default_parts:
+      - {mpn: "S8050 / S8550", brand: "国产（长电/宇宏微等）", code: "—", spec: "NPN/PNP 25V 500mA 300mW SOT-23", note: "小信号万能对管；注意查是否停售"}
+      - {mpn: "MMBT3904 / MMBT3906", brand: "onsemi 等", code: "—", spec: "40V 200mA SOT-23", note: "国际通用对管"}
+      - {mpn: "DTC143Z / DTA143Z", brand: "通用", code: "—", spec: "数字晶体管 4.7k 内置", note: "省电阻，MCU 直驱"}
+    risk_notes:
+      - "停售陷阱：S8050 等经典料在商城显示'商品已停售'（实测两条结果均停售），直接照抄 BOM 会买不到"
+      - "翻新：SOT-23 打磨重印极普遍，hFE 分散；关键位需抽测"
+      - "hFE 虚标/分档混乱：标 GR 实为 O 档（hFE 差 2~3 倍），驱动不足"
+
+  mosfet:
+    display: MOSFET
+    lcsc_category: [场效应管(MOSFET)]
+    mall_params_observed: [数量, 漏源电压(Vdss), 连续漏极电流(Id), 导通电阻(RDS(on))]
+    mall_filter_extra: [封装, 沟道类型(N/P), Vgs(th), 品牌, Qg]
+    required_to_specify: [vds, id, rds_on, vgs_th, package, channel_type]
+    substitute_equivalence: "沟道类型相同 + Vds>= + Id>= + Rds(on)<= + Vgs(th) 驱动兼容 + 封装相同 = 可替换"
+    critical:
+      - key: vds
+        unit: V
+        cmp: gte_margin
+        margin: 1.5
+        conf: E
+        note: "Vds >= 1.5x 最高漏源电压；开关感性负载（电机/继电器/变压器）取 2x（尖峰）"
+      - key: id
+        unit: A
+        cmp: gte_margin
+        margin: 1.3
+        conf: E
+        note: "Id 是壳温 25℃ 的理想值，实际必须按 Rds(on) 和温升复核，不能只看 Id"
+      - key: rds_on
+        unit: ohm
+        cmp: lte
+        conf: D
+        note: |
+          必须用相同 Vgs 条件下的 Rds(on) 比较！
+          实测同 MPN 不同品牌：48mΩ@Vgs=2.5V 与 17mΩ@Vgs=10V —— 数值不可直接比。
+          损耗 P = I^2 * Rds(on)(@实际Vgs, @高温)
+      - key: vgs_th
+        unit: V
+        cmp: drive_compatible
+        conf: D
+        note: "逻辑电平 MOS 的 Vgs(th) 要低（<=1.5V），3.3V MCU 直驱必须选 Vgs(th)<=1.5V 且 Rds(on) 在 Vgs=2.5~4.5V 已达标"
+      - key: package
+        unit: null
+        cmp: enum_compatible
+        conf: S
+        note: "SOT-23/SOP-8/DFN/TO-252 焊盘不同；DFN 与 SOP-8 引脚定义常不同"
+      - key: channel_type
+        unit: null
+        cmp: enum_equal
+        conf: S
+        note: "N 沟道 / P 沟道不可互换"
+    conditional_critical:
+      - when: "PWM 高频开关（>100kHz）"
+        keys: [qg, ciss, tr/tf]
+        tighten: "Qg 决定驱动损耗；Qg 过大导致开关损耗与驱动不足"
+        conf: E
+      - when: "同步整流 / 低边大电流"
+        keys: [rds_on, 体二极管反向恢复]
+        tighten: "Rds(on) 优先，注意体二极管特性"
+        conf: E
+      - when: "高边驱动（N 沟道）"
+        keys: [vgs, 自举]
+        tighten: "必须保证 Vgs 在自举后仍在规格内；否则改用 P 沟道或专用驱动"
+        conf: E
+    relaxable:
+      - {key: brand, note: "实测 AO3400A 价差 3.2x（AOS 0.3394@500 vs UMW 0.106@3000）"}
+      - {key: vds, note: "非感性负载可只留 1.3x"}
+      - {key: id, note: "有充分散热与 Rds(on) 核算时可放宽"}
+    upgrade_rules:
+      - {id: m_low_rds, when: "发热/效率不足", do: "换更低 Rds(on)（常来自更大封装）", cost: "料价/面积"}
+      - {id: m_logic, when: "MCU 直驱", do: "普通 MOS -> 逻辑电平 MOS", cost: "1.1~1.5x"}
+      - {id: m_free_upgrade, when: "同封装下更低 Rds(on) 且更便宜", do: "直接换", conf: E}
+    forbid_rules:
+      - "严禁 P/N 沟道互换"
+      - "严禁在 3.3V 直驱场合用 Vgs(th) 2~4V 的普通 MOS（驱动不足，Rds(on) 暴涨甚至线性区烧毁）"
+      - "严禁只按 Id 选型而不核算 Rds(on) 发热"
+      - "严禁 Vds 降额不足用于电机/继电器负载"
+    price_band:
+      ref: "AO3400A SOT-23 30V 5.7A"
+      tiers_rmb: [{qty: 5, price: 0.543}, {qty: 50, price: 0.4379}, {qty: 500, price: 0.3394}]
+      budget_alt: "国产 20 起 0.2119 / 3000 起 0.106"
+      conf: M
+    default_parts:
+      - {mpn: "AO3400A", brand: "AOS", code: "C20917", spec: "N 30V 5.7A Rds(on) 48mΩ@2.5V SOT-23", note: "小功率开关基准"}
+      - {mpn: "AO3400A", brand: "UMW(友台半导体)", code: "C347475", spec: "N 30V 5.8A Rds(on) 17mΩ@10V SOT-23", note: "国产低价；注意 Rds(on) 测试条件不同"}
+      - {mpn: "AO3401A", brand: "通用", code: "—", spec: "P 沟道 30V -4.2A SOT-23", note: "高边开关"}
+      - {mpn: "SI2302 / AO3402", brand: "通用", code: "—", spec: "逻辑电平 N 沟道 20~30V", note: "3.3V 直驱场景"}
+    risk_notes:
+      - "参数同型号不同品牌不可直接对比：实测同 MPN 的 Rds(on) 标注条件为 @2.5V 与 @10V，差 3 倍，是条件差异不是性能差异"
+      - "假 AO3400：实为普通 NPN 或低规格 MOS 重印；Rds(on) 偏高、发热。识别：量 Vgs(th) 与 Rds(on)"
+      - "封装混料：SOT-23 的 N/P 沟道引脚定义部分不同，替换要核 pinout"
+      - "翻新：MOS 管拆机打磨最常见，硅片已退化（Rds(on) 上升 20%+）"
+
+  # ------------------------------------------------------------ 模拟 IC ----
+  opamp:
+    display: 运算放大器
+    lcsc_category: [运算放大器]
+    mall_params_observed: [放大器数, 增益带宽积(GBP), 输入失调电压(Vos), 压摆率(SR), 输入偏置电流(Ib), 单电源电压]
+    mall_filter_extra: [封装, 轨到轨, 品牌, 通道数, 静态电流]
+    required_to_specify: [channels, gbw, vos, supply_range, rail_to_rail, package]
+    substitute_equivalence: "通道数相同 + 供电范围覆盖 + GBW>= + Vos<= + 轨到轨需求满足 + 封装相同 = 可替换"
+    critical:
+      - key: supply_range
+        unit: V
+        cmp: range_covers
+        conf: D
+        note: "必须覆盖系统供电（注意单电源 vs 双电源；部分老器件最低 4.5V，3.3V 系统不能用）"
+      - key: gbw
+        unit: Hz
+        cmp: gte_margin
+        margin: 3.0
+        conf: E
+        note: "闭环增益 G 时，可用带宽 = GBW/G；工程上要求 GBW >= 3x 目标信号带宽 x 增益"
+      - key: vos
+        unit: V
+        cmp: lte
+        conf: D
+        note: "直流放大/传感器前端 Vos 直接变成误差；交流/音频可放宽"
+      - key: rail_to_rail
+        unit: null
+        cmp: flag_required
+        conf: D
+        note: "输入轨到轨(RRI) / 输出轨到轨(RRO) 要分开确认；低边电流采样必须 RRI"
+      - key: channels
+        unit: null
+        cmp: gte
+        conf: S
+        note: "双运放可替代单运放（另一路闲置），反向不可"
+      - key: package
+        unit: null
+        cmp: enum_compatible
+        conf: S
+        note: "SOP-8/SOT-23-5/MSOP-8 引脚定义不同（单运放 SOT-23-5 有 5 种 pinout）"
+    conditional_critical:
+      - when: "高精度/直流测量"
+        keys: [vos, vos_drift, cmrr, psrr, noise]
+        tighten: "Vos < 100uV 级；注意温漂 uV/℃"
+        conf: E
+      - when: "高速/视频"
+        keys: [sr, settling_time]
+        conf: E
+      - when: "单电源/低功耗电池"
+        keys: [supply_range, iq, rrio]
+        conf: E
+    relaxable:
+      - {key: brand, note: "实测 LM358 onsemi 0.3308@10 vs 国产 0.59877@5（此处国产反而贵，因小批量）；同规格原则可大幅降本"}
+      - {key: gbw, note: "非高速场合 1MHz 足够；LM358 是最便宜的通用解"}
+      - {key: 封装, note: "SOP-8 与 DIP-8 可通过转接板"}
+    upgrade_rules:
+      - {id: op_cheap, when: "通用低速/成本优先", do: "LM358/LM324 系列（双/四，极便宜）", cost: "0.2~0.5x", conf: E}
+      - {id: op_precision, when: "失调要求高", do: "通用 -> 精密（OP07/OPA333 类）", cost: "3~20x"}
+      - {id: op_rrio, when: "3.3V 单电源低边采样", do: "普通 -> RRIO 运放", cost: "2~5x", note: "绝对必要，不能省"}
+    forbid_rules:
+      - "严禁用最低供电 4.5V 的老运放（如 LM358 的 3V 版本要注意）上 3.3V 单电源"
+      - "严禁在需要 RRIO 的场合用普通运放（输出无法到轨，低位信号丢失）"
+      - "严禁单/双/四运放 pinout 混用（SOT-23-5 单运放有 5 种引脚排列）"
+      - "严禁比较器当运放用（无相位补偿，会振荡）；运放当比较器用（速度慢且输出电平不对）"
+    price_band:
+      ref: "LM358 SOP-8 双运放 1MHz"
+      tiers_rmb: [{qty: 10, price: 0.3308}]
+      budget_alt: "国产 LM358P8 5 起 0.59877（GBW 1MHz Vos 1mV）"
+      conf: M
+    default_parts:
+      - {mpn: "LM358", brand: "onsemi", code: "C7950", spec: "双运放 1MHz 单/双电源", note: "最经典通用料"}
+      - {mpn: "LM358P8", brand: "R+O(宏嘉诚)", code: "C54951947", spec: "双运放 GBW 1MHz Vos 1mV", note: "国产"}
+      - {mpn: "LM324", brand: "通用", code: "—", spec: "四运放 SOP-14", note: "多路场合更省"}
+      - {mpn: "OPA333 / AD8628", brand: "TI/ADI", code: "—", spec: "零漂移 Vos<10uV", note: "精密场合"}
+    risk_notes:
+      - "参数行不齐全：实测部分店铺页面只写'双运放 SOP-8'，GBW/Vos 需查 datasheet，不能凭页面比价"
+      - "翻新：LM358/LM324 是拆机重灾区（量大、引脚少），丝印发白/引脚有锡痕"
+      - "同封装不同 pinout：SOT-23-5 单运放至少有 5 种 pinout，替换必查"
+
+  comparator:
+    display: 比较器
+    lcsc_category: [比较器]
+    mall_params_observed: [比较器数, 输入失调电压(Vos), 传播延迟(tpd), 输出类型, 供电电压]
+    mall_filter_extra: [封装, 品牌, 静态电流]
+    required_to_specify: [channels, tpd, vos, output_type, supply_range, package]
+    substitute_equivalence: "输出类型(开漏/推挽)相同 + 供电满足 + tpd<= + 封装兼容 = 可替换"
+    critical:
+      - key: output_type
+        unit: null
+        cmp: enum_equal
+        conf: S
+        note: "开漏(OC)/推挽不可随意互换：开漏输出需上拉，推挽可直接驱动；开漏可线与"
+      - key: tpd
+        unit: s
+        cmp: lte
+        conf: D
+        note: "传播延迟决定可检测的最小脉宽/最高频率"
+      - key: vos
+        unit: V
+        cmp: lte
+        conf: D
+        note: "比较阈值精度；过零检测/欠压保护要求高"
+      - key: supply_range
+        unit: V
+        cmp: range_covers
+        conf: D
+      - key: input_common_mode
+        unit: V
+        cmp: range_covers
+        conf: D
+        note: "输入共模范围常不足到负轨，低边采样要确认"
+    relaxable:
+      - {key: brand, note: "LM393 onsemi 0.3664@10 vs ST 0.4788@5，国产更便宜"}
+      - {key: 封装, note: "SOP-8/SOT-23-5"}
+    upgrade_rules:
+      - {id: cmp_cheap, when: "普通阈值检测", do: "LM393/LM339（双/四，极便宜）", conf: E}
+      - {id: cmp_precision, when: "高精度", do: "用带基准的比较器或 ADC 软件比较", cost: "2~10x"}
+    forbid_rules:
+      - "严禁开漏改推挽（会破坏线与/电平匹配）"
+      - "严禁运放替代比较器用于数字边沿场合"
+    price_band:
+      ref: "LM393 SOP-8 双比较器"
+      tiers_rmb: [{qty: 10, price: 0.3664}]
+      budget_alt: "ST 5 起 0.4788（Vos 1mV tpd 1.3us）"
+      conf: M
+    default_parts:
+      - {mpn: "LM393", brand: "onsemi", code: "C7955", spec: "双比较器 Vos 5mV tpd 300ns 开漏", note: "最常用开漏比较器"}
+      - {mpn: "LM339", brand: "通用", code: "—", spec: "四比较器 SOP-14", note: "多路"}
+    risk_notes:
+      - "同型号 tpd 差 4 倍（onsemi 300ns vs ST 1.3us），页面参数不可全信，需查 datasheet"
+      - "开漏输出忘加上拉是新手最常踩的坑（表现为输出永远高阻/浮空）"
+
+  ldo:
+    display: LDO 线性稳压器
+    lcsc_category: [线性稳压器(LDO)]
+    mall_params_observed: [输出类型, 输出电压, 输出电流, 电源纹波抑制比(PSRR), 压差, 静态电流]
+    mall_filter_extra: [封装, 品牌, 输入电压范围, 噪声]
+    required_to_specify: [vin_range, vout, iout, dropout, iq, package]
+    substitute_equivalence: "Vout 相同(±2%) + Iout>= + Vin 覆盖 + 压差满足 + 封装兼容 = 可替换"
+    critical:
+      - key: vin_range
+        unit: V
+        cmp: range_covers
+        conf: D
+        note: "绝对最大输入电压必须 > 输入最高值（含瞬态）；AMS1117 最大 15V，直连 12V 余量小"
+      - key: vout
+        unit: V
+        cmp: abs_diff_lte
+        tolerance: 0.02
+        conf: S
+        note: "固定输出型不可与可调型互换；可调型用 FB 电压决定输出"
+      - key: iout
+        unit: A
+        cmp: gte_margin
+        margin: 1.3
+        conf: E
+        note: "要按最高结温降额而非 25℃ 值；SOT-223 的 1A 实际常只能持续 0.5~0.8A"
+      - key: dropout
+        unit: V
+        cmp: headroom_ok
+        conf: D
+        note: "必须保证 Vin_min - Vout > dropout + 纹波；掉出 dropout 后 PSRR 崩溃、输出跟随输入下陷"
+      - key: iq
+        unit: A
+        cmp: lte
+        conf: D
+        note: "电池待机/常开设备关键：AMS1117 静态电流约 5mA，是低功耗设计的杀手"
+      - key: package
+        unit: null
+        cmp: enum_compatible
+        conf: S
+        note: "SOT-223/TO-252/SOT-23-5/DFN 焊盘与散热能力差异大"
+    conditional_critical:
+      - when: "射频/ADC/音频供电"
+        keys: [psrr, output_noise]
+        tighten: "PSRR@1kHz > 60dB；噪声 < 50uVrms"
+        conf: E
+      - when: "电池供电/低功耗"
+        keys: [iq, dropout]
+        tighten: "Iq < 10uA 必须选低功耗 LDO"
+        conf: E
+      - when: "大压差/大电流"
+        keys: [power_dissipation]
+        tighten: "P=(Vin-Vout)*Iout，必须核算温升；超过 0.5W 就要考虑 DCDC"
+        conf: E
+    relaxable:
+      - {key: brand, note: "实测 AMS1117-3.3 价差 5x（0.7247@500 vs 国产 0.139365@1000）"}
+      - {key: psrr, note: "数字电路供电可放宽到 40dB"}
+      - {key: 精度, note: "±2% 普通，±1% 足够"}
+    upgrade_rules:
+      - {id: ldo_cheap, when: "普通数字负载", do: "AMS1117-3.3 / 1117 系列", cost: "最低", note: "静态电流大，电池场合禁用"}
+      - {id: ldo_lowiq, when: "电池待机", do: "低 Iq LDO（HT7333/XC6206 类）", cost: "1.5~3x", note: "必须，否则待机续航崩"}
+      - {id: ldo_lownoise, when: "ADC/射频", do: "低噪声 LDO 或 LDO + π 滤波", cost: "3~10x"}
+      - {id: ldo_to_dcdc, when: "压差>3V 或电流>1A", do: "改用 DCDC 降压", cost: "料价相近但外围多", conf: E, note: "线性在大压差下效率极低"}
+    forbid_rules:
+      - "严禁压差不足（Vin 只比 Vout 高 0.3V 却用 dropout 1.1V 的 AMS1117）"
+      - "严禁在电池设备上用 AMS1117（5mA 静态电流）"
+      - "严禁功耗不核算（1A 从 12V 降到 3.3V = 8.7W，SOT-223 必烧）"
+      - "严禁固定输出与可调输出混用（ADJ 型 FB=1.25V，不是 Vout）"
+    price_band:
+      ref: "AMS1117-3.3 SOT-223 800mA"
+      tiers_rmb: [{qty: 500, price: 0.7247}, {qty: 1000, price: 0.139365}]
+      note: "同 MPN 不同品牌价差约 5x，品牌属 relaxable"
+      conf: M
+    default_parts:
+      - {mpn: "AMS1117-3.3", brand: "通用/国产", code: "—", spec: "3.3V 800mA SOT-223 dropout 1.1V Iq 5mA", note: "最便宜通用；电池场合禁用"}
+      - {mpn: "HT7333-A", brand: "Holtek/国产", code: "—", spec: "3.3V 250mA SOT-89 Iq 4uA", note: "低功耗首选"}
+      - {mpn: "XC6206P332MR", brand: "Torex/国产", code: "—", spec: "3.3V 200mA SOT-23 Iq 3uA", note: "小电流低功耗"}
+      - {mpn: "LM317", brand: "TI/国产", code: "—", spec: "可调 1.25~37V 1.5A", note: "可调通用"}
+    risk_notes:
+      - "AMS1117 假货最多：实为 1117-ADJ 或 78L33 重印，输出不稳/带载掉压。识别：带载测 Vout、看静态电流"
+      - "静电/浪涌：1117 类对输入瞬态敏感，输入端必须有 10uF 以上电容，否则自激振荡"
+      - "封装能力误解：SOT-223 标 1A，实际无铜箔散热时只能 0.5A"
+
+  dcdc:
+    display: DC-DC 开关电源（降压/升压）
+    lcsc_category: [DC-DC电源芯片, 升降压芯片]
+    mall_params_observed: [功能类型, 输出电流, 输入电压, 输出电压, 开关频率, 同步整流]
+    mall_filter_extra: [封装, 品牌, 静态电流, 外围器件数]
+    required_to_specify: [topology, vin_range, vout, iout, fsw, package]
+    substitute_equivalence: "拓扑相同 + Vin/Vout 覆盖 + Iout>= + 引脚/外围兼容 = 可替换（外围元件需重算）"
+    critical:
+      - key: topology
+        unit: null
+        cmp: enum_equal
+        conf: S
+        note: "降压(Buck)/升压(Boost)/升降压(Buck-Boost) 不可互换"
+      - key: vin_range
+        unit: V
+        cmp: range_covers
+        conf: D
+        note: "含输入瞬态与启动浪涌；36V 工业场合要选 40V+"
+      - key: vout
+        unit: V
+        cmp: range_covers_target
+        conf: D
+        note: "固定输出 vs 可调（FB 基准不同，如 0.6V/0.8V/1.23V）不可混"
+      - key: iout
+        unit: A
+        cmp: gte_margin
+        margin: 1.3
+        conf: E
+        note: "标称 Iout 是芯片限流值，实际可用电流受电感/散热限制；升压型输入电流 = Iout*Vout/Vin/eff"
+      - key: fsw
+        unit: Hz
+        cmp: enum_compatible
+        conf: D
+        note: "开关频率影响电感/电容选型与 EMI；替换芯片必须重算外围"
+      - key: package
+        unit: null
+        cmp: enum_compatible
+        conf: S
+      - key: external_components
+        unit: null
+        cmp: compatible_check
+        conf: D
+        note: "同步整流(内置 MOS) vs 非同步(需外置肖特基)；外围数量决定成本与面积"
+    conditional_critical:
+      - when: "低 EMI / 汽车 / 精密模拟供电"
+        keys: [fsw, 展频, 布局]
+        conf: E
+      - when: "电池升压"
+        keys: [vin_min, quiescent, 启动电压]
+        tighten: "启动电压要低于电池最低电压"
+        conf: E
+      - when: "大电流"
+        keys: [电感 Isat, 输入电容 RMS 电流, 散热]
+        conf: E
+    relaxable:
+      - {key: brand, note: "实测 MT3608 1:0.5833 vs MT3608L 0.3411；LM2596 TI 10.1@1 vs UMW 2.64@30（≈4x）"}
+      - {key: fsw, note: "非 EMI 敏感场合可放宽"}
+      - {key: 效率, note: "80% 与 90% 在小功率场合差异可接受"}
+    upgrade_rules:
+      - {id: dc_sync, when: "效率/体积优先", do: "非同步 -> 同步整流", cost: "1.5~3x", note: "省肖特基、效率高 5~10%"}
+      - {id: dc_module, when: "开发周期紧/量小", do: "用成品电源模块（B0505S 类）", cost: "2~5x 但省调试", conf: E}
+      - {id: dc_ldo, when: "压差小/电流小/噪声敏感", do: "改用 LDO", cost: "更低", conf: E}
+    forbid_rules:
+      - "严禁拓扑混用（Buck 芯片不能升压）"
+      - "严禁替换芯片不重算外围（fsw/FB 基准/补偿网络不同会不稳定或炸机）"
+      - "严禁电感 Isat 不足（饱和后电流失控，MOS 烧毁）"
+      - "严禁升压型按输出电流选输入电容（输入电流远大于输出电流）"
+    price_band:
+      ref: "MT3608 SOT-23-6 升压 2~24Vin 4A开关"
+      tiers_rmb: [{qty: 1, price: 0.5833}]
+      budget_alt: "MT3608L 1 起 0.3411；LM2596S-5.0 TI 1 起 10.1 / UMW 30 起 2.64"
+      conf: M
+    default_parts:
+      - {mpn: "MT3608", brand: "通用", code: "C84817", spec: "升压 2~24Vin 1.2MHz 4A 开关", note: "最便宜升压，小电流"}
+      - {mpn: "LM2596S-5.0", brand: "TI / UMW", code: "C116713(TI)", spec: "降压 4.5~40Vin 3A 150kHz", note: "经典降压，外围大电感"}
+      - {mpn: "MP1584 / MP2307", brand: "MPS/国产", code: "—", spec: "降压 4.5~28Vin 3A 1.5MHz", note: "小体积降压"}
+      - {mpn: "TPS5430", brand: "TI", code: "—", spec: "降压 5.5~36Vin 3A 500kHz", note: "宽压工业"}
+    risk_notes:
+      - "MT3608 假货/翻新极多（丝印打磨），表现为带载掉压、效率低、烧 MOS"
+      - "外围偷工：廉价模块用电感 Isat 不足 + 电容缩水，标 2A 实际 0.5A"
+      - "LM2596 系列假货：实为散新，标 3A 实际 1.5A 就过热保护"
+      - "识别：满载测温升与纹波；看开关波形是否干净（假货常振铃严重）"
+
+  charge_pump:
+    display: 电荷泵 / 反压芯片
+    lcsc_category: [电荷泵]
+    mall_params_observed: [输出电流, 输入电压, 输出电压, 开关频率]
+    mall_filter_extra: [封装, 品牌, 外围]
+    required_to_specify: [vin_range, vout_ratio, iout, fsw, package]
+    substitute_equivalence: "倍数/极性相同 + Vin 覆盖 + Iout>= + 封装兼容 = 可替换"
+    critical:
+      - key: vout_ratio
+        unit: null
+        cmp: enum_equal
+        conf: S
+        note: "倍压(2x)/反压(-Vin)/分数倍 不可互换"
+      - key: iout
+        unit: A
+        cmp: gte_margin
+        margin: 1.3
+        conf: E
+        note: "电荷泵输出电流能力小（几十~几百 mA），且随 Vin 下降而下降"
+      - key: vin_range
+        unit: V
+        cmp: range_covers
+        conf: D
+      - key: fsw
+        unit: Hz
+        cmp: enum_compatible
+        conf: D
+        note: "频率决定飞电容/输出电容大小；低频需大电容"
+    relaxable:
+      - {key: brand, note: "实测 ICL7660 华冠 1.1167@5 vs 瑞萨 5.82@1（≈5x）"}
+      - {key: 效率, note: "电荷泵效率天然低于电感型，非关键"}
+    upgrade_rules:
+      - {id: cp_to_dcdc, when: "电流 >200mA 或需要高效率", do: "改用电感型 DCDC", conf: E}
+    forbid_rules:
+      - "严禁用反压型替代倍压型"
+      - "严禁飞电容耐压不足（倍压时飞电容承受 2x Vin）"
+    price_band:
+      ref: "ICL7660 SOP-8 反压"
+      tiers_rmb: [{qty: 5, price: 1.1167}, {qty: 150, price: 0.7927}]
+      budget_alt: "瑞萨原厂 1 起 5.82"
+      conf: M
+    default_parts:
+      - {mpn: "ICL7660M/TR", brand: "华冠/通用", code: "C356724", spec: "反压 -Vin 100mA SOP-8", note: "最便宜负压"}
+      - {mpn: "ICL7660AIBAZA-T", brand: "Renesas", code: "C7881", spec: "反压 改进版", note: "原厂"}
+    risk_notes:
+      - "ICL7660 系列翻新普遍；表现为输出带载能力差、起振失败"
+      - "飞电容用错介质（Y5V）导致容量随温度崩塌、输出纹波暴涨"
+
+  crystal_oscillator:
+    display: 晶振 / 振荡器
+    lcsc_category: [无源晶振, 有源晶振, 晶体振荡器]
+    mall_params_observed: [频率, 负载电容, 频率稳定度, 工作温度, 封装]
+    mall_filter_extra: [品牌, 精度, 类型(无源/有源)]
+    required_to_specify: [freq, load_cap, tolerance, package, type]
+    substitute_equivalence: "频率相同 + 类型相同 + 负载电容相同 + 精度不劣 + 封装兼容 = 可替换"
+    critical:
+      - key: freq
+        unit: Hz
+        cmp: equal_exact
+        conf: S
+        note: "频率必须完全一致（不可能靠替换改频）"
+      - key: load_cap
+        unit: F
+        cmp: equal_exact
+        conf: S
+        note: |
+          负载电容 CL 必须与原设计匹配（常见 8pF/9pF/12pF/20pF）。
+          CL 不同会导致实际频率偏移（可偏几百 ppm），串口/USB 通信失败。
+          这是晶振替换最容易被忽略的致命参数。
+      - key: type
+        unit: null
+        cmp: enum_equal
+        conf: S
+        note: "无源(需 MCU 内部振荡电路) vs 有源(自带输出) 不可互换"
+      - key: tolerance
+        unit: ppm
+        cmp: lte
+        conf: D
+        note: "串口通信用 ±20ppm 足够；USB/以太网需 ±10ppm 或更高；RTC 用 32.768kHz ±20ppm"
+      - key: package
+        unit: null
+        cmp: enum_compatible
+        conf: S
+        note: "3225/2520/2016/DT-26/圆柱 封装差异大；贴片与直插不可混"
+    relaxable:
+      - {key: brand, note: "实测 16MHz YXC 0.5705@5 / 0.327655@500"}
+      - {key: tolerance, note: "非通信场合 ±30ppm 可用"}
+      - {key: 工作温度, note: "室内民用 -20~70℃ 足够"}
+    upgrade_rules:
+      - {id: xtal_tcxo, when: "宽温/高精度", do: "无源 -> TCXO 有源", cost: "5~20x"}
+      - {id: xtal_lower_ppm, when: "USB/以太网", do: "±20ppm -> ±10ppm", cost: "1.2~2x"}
+    forbid_rules:
+      - "严禁负载电容不匹配替换（会偏频导致通信失败）"
+      - "严禁无源/有源互换"
+      - "严禁频率近似替换（'差不多'的频率不存在）"
+    price_band:
+      ref: "16MHz 3225 无源 ±10ppm 9pF"
+      tiers_rmb: [{qty: 5, price: 0.5705}, {qty: 500, price: 0.327655}]
+      conf: M
+    default_parts:
+      - {mpn: "X322516MLB4SI", brand: "YXC(扬兴)", code: "C13738", spec: "16MHz ±10ppm 9pF 3225", note: "STM32 常用"}
+      - {mpn: "8MHz 3225 / 32.768kHz", brand: "通用", code: "—", spec: "MCU 主频 / RTC", note: "按 MCU 手册选 CL"}
+    risk_notes:
+      - "负载电容是仿真参数而非可选参数：替换前必须查 MCU 手册与晶振 CL，二者要匹配外部电容 C=2*(CL-Cstray)"
+      - "翻新/散新：晶振频率偏移超差（±100ppm 以上），表现为串口误码率上升"
+      - "识别：用频率计/示波器测实际输出频率（有源）或无源晶振的起振与频率"
+
+  # ------------------------------------------------------- 数字/接口 ----
+  mcu:
+    display: MCU / 单片机
+    lcsc_category: [单片机(MCU/MPU/SOC)]
+    mall_params_observed: [程序存储容量, RAM容量, 内核, 主频, 工作电压, 封装, 外设]
+    mall_filter_extra: [品牌, 系列, 温度范围, 引脚数, ADC/串口/定时器数量]
+    required_to_specify: [family, flash, ram, package, supply, core_peripherals]
+    substitute_equivalence: |
+      同系列同封装可视为"引脚级 drop-in"（如 STM32F103C8T6 -> C6T6/CB，Flash 更大可替代更小）；
+      跨系列最大只能"功能等价"替代，必须重新验证引脚映射与外设寄存器。
+    critical:
+      - key: package
+        unit: null
+        cmp: enum_equal
+        conf: S
+        note: "LQFP48/TSSOP20/QFN 引脚数与排列完全不同；同封装才谈 drop-in"
+      - key: supply
+        unit: V
+        cmp: range_covers
+        conf: D
+        note: "3.3V 系列 vs 5V 系列（如 STC89/STC15）不可互换"
+      - key: flash
+        unit: B
+        cmp: gte
+        conf: D
+        note: "大 Flash 可替代小 Flash（同系列同封装），反之不可"
+      - key: ram
+        unit: B
+        cmp: gte
+        conf: D
+        note: "RAM 不足是最隐蔽的替换坑（编译可过、运行崩栈）"
+      - key: core_peripherals
+        unit: null
+        cmp: set_superset
+        conf: D
+        note: "ADC/串口/I2C/SPI/定时器 数量必须覆盖需求；复用映射也要一致"
+      - key: pin_remap
+        unit: null
+        cmp: mapping_warning
+        conf: D
+        note: "同系列不同容量型号外设引脚映射可能不同（如 STM32F103 中容量与高容量差异）"
+    conditional_critical:
+      - when: "量产/长期供货"
+        keys: [生命周期, 库存稳定性, 开源工具链支持]
+        tighten: "优先在售且多供应商型号；避开 EOL"
+        conf: E
+      - when: "低功耗/电池"
+        keys: [休眠电流, 唤醒时间]
+        conf: E
+    relaxable:
+      - {key: brand, note: "STM32F103C8T6 ST 1:9.12/250:6.3；国产 GD32/APM32 同封装兼容可省 30~50%"}
+      - {key: 温度等级, note: "民用 0~85℃ 足够"}
+      - {key: Flash 容量, note: "余量 30% 以上可不追大"}
+    upgrade_rules:
+      - {id: mcu_flashup, when: "空间不足", do: "同系列更大 Flash（同封装引脚兼容）", cost: "1.1~1.3x"}
+      - {id: mcu_gd32, when: "降本且接受兼容验证", do: "STM32 -> GD32/APM32（需验证启动时间/ADC 精度/USB）", cost: "0.5~0.7x"}
+    forbid_rules:
+      - "严禁跨封装直接替换（哪怕引脚数相同）"
+      - "严禁 RAM 不足替代（编译不报错，运行随机崩）"
+      - "严禁把'国产兼容'当 pin-to-pin 无条件替换，必须验证 ADC/时钟/USB/低功耗等模拟特性"
+    price_band:
+      ref: "STM32F103C8T6 LQFP48 M3 72MHz 64KB"
+      tiers_rmb: [{qty: 1, price: 9.12}, {qty: 250, price: 6.3}]
+      conf: M
+    default_parts:
+      - {mpn: "STM32F103C8T6", brand: "ST", code: "C8734", spec: "M3 72MHz 64KB/20KB LQFP48", note: "最通用入门 MCU"}
+      - {mpn: "CH340C", brand: "WCH", code: "C84681", spec: "USB 转串口 USB2.0 3.3/5V 2Mbps", note: "省晶振；CH340G 需晶振"}
+      - {mpn: "NE555DR", brand: "TI", code: "C7593", spec: "定时器 4.5~16V 200mA", note: "经典定时/振荡"}
+      - {mpn: "GD32F103C8T6", brand: "GigaDevice", code: "—", spec: "STM32 兼容替代", note: "降本选项，需验证"}
+    risk_notes:
+      - "翻新/打磨片是 MCU 最大风险：量大、丝印好改。识别：读出 Flash 大小与丝印不符（C8 应 64KB）、UID 重复、擦写次数异常"
+      - "国产兼容片陷阱：引脚兼容但 ADC 精度/内部时钟/USB 需重新验证，直接替换可能通信失败"
+      - "EOL 风险：老型号（如 STM32F103 部分后缀）价格暴涨或断货，BOM 必须标注生命周期"
+
+  connector_header:
+    display: 排针 / 排母
+    lcsc_category: [排针, 排母, 圆孔排针]
+    mall_params_observed: [间距, 排数, 每排针脚数, 安装方式(直插/弯插/立贴), 塑高]
+    mall_filter_extra: [品牌, 镀层, 针长, 包装]
+    required_to_specify: [pitch, rows, pins_per_row, mounting, plating]
+    substitute_equivalence: "间距相同 + 排数相同 + 针数>= + 安装方向相同 = 可替换（长针可裁短）"
+    critical:
+      - key: pitch
+        unit: null
+        cmp: equal_exact
+        conf: S
+        note: "2.54/2.00/1.27/1.00mm 完全不可混；2.54 是最通用"
+      - key: mounting
+        unit: null
+        cmp: enum_equal
+        conf: S
+        note: "直针/弯针(90°)/立贴(SMD) 不可互换；弯针方向错误等于报废"
+      - key: rows
+        unit: null
+        cmp: equal_exact
+        conf: S
+        note: "单排/双排不可混"
+      - key: pins_per_row
+        unit: null
+        cmp: gte
+        conf: S
+        note: "长排针可裁剪为短排针（2.54-1*40P 可剪成任意针数），此法可临时替代缺货"
+      - key: plating
+        unit: null
+        cmp: enum_compatible
+        conf: E
+        note: "镀金/镀锡：镀金插拔寿命与接触电阻更好，成本高；民用一次性可用镀锡"
+    relaxable:
+      - {key: 塑高, note: "常见 1.5/2.0/2.5mm，非机构限制可放宽"}
+      - {key: brand, note: "实测 2.54-1*40P 5 起 0.9725；2.54-1x6P 10 起 0.2547"}
+      - {key: 针长, note: "可放宽，只要不干涉装配"}
+    upgrade_rules:
+      - {id: hdr_plating, when: "反复插拔/高可靠", do: "镀锡 -> 镀金", cost: "1.5~3x"}
+      - {id: hdr_cut, when: "缺货", do: "用更长排针裁剪", conf: E}
+    forbid_rules:
+      - "严禁间距混用（2.54 与 2.00 外观接近，插错会顶坏针座）"
+      - "严禁弯针/直针混用"
+    price_band:
+      ref: "2.54mm 单排直针"
+      tiers_rmb: [{qty: 5, price: 0.9725}]
+      note: "2.54-1*40P 5 起 0.9725；2.54-1x6P 10 起 0.2547"
+      conf: M
+    default_parts:
+      - {mpn: "2.54-1*40P 直针", brand: "通用", code: "C2337", spec: "2.54mm 单排 40P 直插", note: "可按需裁剪"}
+      - {mpn: "2.54-1x6P / 1x8P", brand: "通用", code: "C37208", spec: "定长排针", note: "量产用，避免裁剪工时"}
+    risk_notes:
+      - "翻新/回收针：拆机排针镀层磨损、针发黑；识别看光泽与氧化"
+      - "针材：铁针 vs 铜针（铁丝易断且焊接困难）；磁铁测试可初步识别"
+      - "塑高混料：2.54 排针塑高有多种，装配到固定高度外壳时会顶不到"
+
+  connector_usb:
+    display: USB / Type-C 连接器
+    lcsc_category: [USB连接器, Type-C连接器]
+    mall_params_observed: [连接器类型, 触点数量, 安装方式, 电流额定值, 电压额定值]
+    mall_filter_extra: [品牌, 封装, 是否带外壳/沉板, 防水]
+    required_to_specify: [type, pin_count, mounting, current_rating]
+    substitute_equivalence: "接口类型相同 + 引脚数相同 + 安装方式相同 + 电流够 = 可替换"
+    critical:
+      - key: type
+        unit: null
+        cmp: enum_equal
+        conf: S
+        note: "Type-C / Micro-USB / Mini-USB / USB-A 不可互换"
+      - key: pin_count
+        unit: null
+        cmp: gte
+        conf: S
+        note: |
+          Type-C 有 6P/16P/24P：
+          - 16P：常见充电/简单 USB2.0，无 USB3 高速对
+          - 24P：全功能（USB3 + PD）
+          16P 与 24P 焊盘不同，不可互换。
+      - key: mounting
+        unit: null
+        cmp: enum_equal
+        conf: S
+        note: "立贴(SMD)/沉板/直插/带定位柱；PCB 开孔与焊盘完全不同"
+      - key: current_rating
+        unit: A
+        cmp: gte_margin
+        margin: 1.3
+        conf: E
+        note: "充电口按实际电流选；Type-C 常见 3A/5A 版本"
+      - key: usb3_pairs
+        unit: null
+        cmp: flag_required
+        conf: S
+        note: "要 USB3/DP 功能必须 24P 全功能型；16P 只能 USB2.0"
+    relaxable:
+      - {key: brand, note: "实测 Type-C 16P 立贴 品赞 1:3.0115/100:1.8335"}
+      - {key: 镀层, note: "镀金厚度影响插拔寿命，民用可放宽"}
+      - {key: 外壳材质, note: "不锈钢 vs 铁壳"}
+    upgrade_rules:
+      - {id: usb_24p, when: "需要 USB3/PD 高速", do: "16P -> 24P", cost: "1.5~3x"}
+      - {id: usb_waterproof, when: "户外", do: "加防水型或防水盖", cost: "3~10x"}
+    forbid_rules:
+      - "严禁 16P 与 24P 互换（焊盘不兼容）"
+      - "严禁立贴与沉板混用"
+      - "严禁用 Micro-USB 替代 Type-C（用户预期与线材都不对）"
+    price_band:
+      ref: "Type-C 16P 母座 立贴"
+      tiers_rmb: [{qty: 1, price: 3.0115}, {qty: 100, price: 1.8335}]
+      conf: M
+    default_parts:
+      - {mpn: "GT-USB-7051A", brand: "品赞", code: "C2843970", spec: "Type-C 16P 母座 立贴", note: "通用充电+USB2.0"}
+    risk_notes:
+      - "Type-C 母座是最容易松动的器件：廉价品弹片疲劳后接触不良（表现为充电断续）"
+      - "16P 冒充 24P：外观相似，高速对缺失。识别：数引脚/查 datasheet"
+      - "沉板/立贴混发：采购必须核对封装图与 PCB 开孔"
+
+  connector_terminal:
+    display: 端子 / 接线端子（XH/PH/栅栏）
+    lcsc_category: [胶壳端子, 接线端子, 排针连接器]
+    mall_params_observed: [间距, 针脚数, 安装方式, 电流额定值, 电压额定值]
+    mall_filter_extra: [品牌, 系列(XH/PH/VH/栅栏), 是否带锁扣]
+    required_to_specify: [series, pitch, pins, mounting]
+    substitute_equivalence: "系列相同 + 间距相同 + 针数相同 = 可替换（座与插头要成对）"
+    critical:
+      - key: series
+        unit: null
+        cmp: enum_equal
+        conf: S
+        note: "XH2.54 / PH2.0 / VH3.96 / 栅栏 系列不可混，间距接近但锁扣形状不同"
+      - key: pitch
+        unit: null
+        cmp: equal_exact
+        conf: S
+        note: "XH=2.54, PH=2.0, VH=3.96, ZH=1.5"
+      - key: pins
+        unit: null
+        cmp: equal_exact
+        conf: S
+        note: "座与插头针数必须一致；针数不同不能裁"
+      - key: mounting
+        unit: null
+        cmp: enum_equal
+        conf: S
+        note: "立式/卧式(90°)/贴片/直插"
+      - key: current_rating
+        unit: A
+        cmp: gte_margin
+        margin: 1.3
+        conf: E
+        note: "XH 约 3A，PH 约 2A，VH 约 10A，栅栏 10~15A"
+    relaxable:
+      - {key: brand, note: "实测 XH2.54 立式座 5:0.5515/150:0.376"}
+      - {key: 镀层, note: "镀锡可替代镀金（民用）"}
+    upgrade_rules:
+      - {id: term_current, when: "大电流", do: "XH -> VH 或栅栏端子", cost: "1.5~3x"}
+      - {id: term_lock, when: "防振动脱落", do: "加锁扣型或改用带卡扣系列", conf: E}
+    forbid_rules:
+      - "严禁只买座不买插头（必须成对，否则装不上）"
+      - "严禁 XH 与 PH 混插（间距接近，强行插会顶弯针）"
+    price_band:
+      ref: "XH2.54 立式插座 3P"
+      tiers_rmb: [{qty: 5, price: 0.5515}, {qty: 150, price: 0.376}]
+      conf: M
+    default_parts:
+      - {mpn: "XDWF-2501-03P", brand: "通用", code: "C19723937", spec: "XH2.54 立式 3P", note: "电源/信号常用"}
+    risk_notes:
+      - "只买座不买插头是配单高频错误；BOM 必须座/插头/端子三件成套"
+      - "廉价端子弹片薄、插拔几次就松（接触电阻上升发热）"
+
+  relay:
+    display: 继电器
+    lcsc_category: [继电器]
+    mall_params_observed: [线圈电压, 触点形式, 触点电流, 触点电压, 功率]
+    mall_filter_extra: [品牌, 封装, 是否密封, 线圈功率]
+    required_to_specify: [coil_voltage, contact_form, contact_rating, package]
+    substitute_equivalence: "线圈电压相同 + 触点形式相同 + 触点容量>= + 封装/脚位兼容 = 可替换"
+    critical:
+      - key: coil_voltage
+        unit: V
+        cmp: equal_exact
+        conf: S
+        note: "5V/12V/24V 不可混；线圈电压不匹配要么不吸合要么烧线圈"
+      - key: contact_form
+        unit: null
+        cmp: enum_equal
+        conf: S
+        note: "常开(NO)/常闭(NC)/转换(1C=SPDT)；1C 可替代 1A（用 NO 端），反之不可"
+      - key: contact_rating
+        unit: A
+        cmp: gte_margin
+        margin: 1.5
+        conf: E
+        note: "触点电流标称是阻性负载；感性负载（电机/灯）需 2~3x 降额，或加吸收电路"
+      - key: contact_voltage
+        unit: V
+        cmp: gte_margin
+        margin: 1.2
+        conf: E
+        note: "250VAC 是常见值；直流负载的灭弧能力远低于交流，DC 高压要大幅降额"
+      - key: package
+        unit: null
+        cmp: enum_compatible
+        conf: S
+        note: "脚位排列（线圈/触点引脚位置）必须一致，否则插不进 PCB"
+    conditional_critical:
+      - when: "感性/容性负载"
+        keys: [触点寿命, 灭弧]
+        tighten: "必须加 RC 吸收/压敏电阻/续流二极管"
+        conf: E
+      - when: "高可靠/长寿命"
+        keys: [机械寿命, 电气寿命]
+        conf: E
+    relaxable:
+      - {key: brand, note: "实测 SRD-05VDC-SL-C 松乐 1:2.71/100:1.55"}
+      - {key: 密封, note: "普通环境非密封可用"}
+    upgrade_rules:
+      - {id: relay_solid, when: "高频开关/长寿命/无触点噪声", do: "机械继电器 -> 固态继电器(SSR)", cost: "3~10x"}
+      - {id: relay_rating, when: "感性负载", do: "升一档触点电流", cost: "1.2~2x"}
+    forbid_rules:
+      - "严禁线圈电压不匹配"
+      - "严禁用交流额定触点直接切直流高压（灭弧能力差，触点粘连）"
+      - "严禁不接续流二极管（线圈断电反压击穿驱动管）"
+    price_band:
+      ref: "SRD-05VDC-SL-C 5V 1C 250VAC"
+      tiers_rmb: [{qty: 1, price: 2.71}, {qty: 100, price: 1.55}]
+      conf: M
+    default_parts:
+      - {mpn: "SRD-05VDC-SL-C", brand: "松乐(SONGLE)", code: "C35449", spec: "5V 线圈 1C 触点 250VAC", note: "最通用小功率继电器"}
+      - {mpn: "HK4100F-DC5V-SHG", brand: "通用", code: "—", spec: "5V 1C 3A 小型", note: "体积更小"}
+    risk_notes:
+      - "翻新继电器：拆机品触点已烧蚀，吸合正常但接触电阻大、带载发热。识别：测触点电阻、看外壳有无拆痕"
+      - "触点容量虚标：标 10A 实际切 3A 就粘连"
+      - "线圈电阻异常：便宜货线圈匝数不足，吸合力弱、易抖动"
+
+  optocoupler:
+    display: 光耦 / 光电耦合器
+    lcsc_category: [光耦-光电晶体管输出, 光耦-逻辑输出]
+    mall_params_observed: [输入类型, 输出类型, 正向压降(Vf), 正向电流, 隔离电压, CTR]
+    mall_filter_extra: [品牌, 封装, 通道数, 速度]
+    required_to_specify: [type, ctr, isolation_voltage, package, channels]
+    substitute_equivalence: "输出类型相同 + CTR 不劣 + 隔离电压>= + 封装兼容 = 可替换"
+    critical:
+      - key: ctr
+        unit: "%"
+        cmp: gte
+        conf: D
+        note: "电流传输比 CTR 决定驱动能力；CTR 随温度与老化衰减（设计要按最小 CTR 的一半留余量）"
+      - key: isolation_voltage
+        unit: V
+        cmp: gte_margin
+        margin: 1.2
+        conf: E
+        note: "常见 3.75kV/5kVrms；安规场合还需看认证（UL/VDE）"
+      - key: output_type
+        unit: null
+        cmp: enum_equal
+        conf: S
+        note: "晶体管输出 / 达林顿 / 逻辑输出(高速) / 双向可控硅 不可互换"
+      - key: vf
+        unit: V
+        cmp: lte
+        conf: D
+        note: "输入端限流电阻按 Vf 算；Vf 差异会让驱动电流偏差"
+      - key: package
+        unit: null
+        cmp: enum_compatible
+        conf: S
+        note: "DIP-4/SOP-4/SMD-4 引脚间距不同"
+    conditional_critical:
+      - when: "高速通信/开关电源反馈"
+        keys: [上升下降时间, 带宽]
+        tighten: "PC817 很慢（us 级），高速必须用 6N137 类逻辑输出光耦"
+        conf: E
+      - when: "安规隔离"
+        keys: [认证, 爬电距离]
+        conf: S
+    relaxable:
+      - {key: brand, note: "实测 PC817 夏普 5:0.5723 vs 亿光 EL357N 10:0.3537"}
+      - {key: ctr 上限, note: "CTR 过高易受漏电影响"}
+    upgrade_rules:
+      - {id: oc_fast, when: "高速", do: "PC817 -> 6N137/EL357 高速型", cost: "2~5x"}
+      - {id: oc_darlington, when: "需要大电流输出", do: "晶体管输出 -> 达林顿输出", cost: "1.5~2x"}
+    forbid_rules:
+      - "严禁用 PC817 做高速信号隔离（us 级延迟）"
+      - "严禁 CTR 按典型值设计（必须按最小值且随老化衰减）"
+      - "严禁隔离电压降额（安规不可让步）"
+    price_band:
+      ref: "PC817 DIP-4"
+      tiers_rmb: [{qty: 5, price: 0.5723}]
+      budget_alt: "亿光 EL357N(B)(TA)-G 10 起 0.3537"
+      conf: M
+    default_parts:
+      - {mpn: "PC817X2CSP9F", brand: "Sharp(夏普)", code: "C66405", spec: "Vf 1.2V If 50mA DIP-4", note: "最通用光耦"}
+      - {mpn: "EL357N(B)(TA)-G", brand: "Everlight(亿光)", code: "C42381015", spec: "CTR 分档 B 档 SOP-4", note: "贴片版"}
+      - {mpn: "6N137", brand: "通用", code: "—", spec: "10Mbps 逻辑输出", note: "高速隔离"}
+    risk_notes:
+      - "翻新光耦最常见（拆机后 CTR 已衰减），表现为输出驱动不足、开关变慢"
+      - "CTR 分档混料：A/B/C/D 档 CTR 差几倍，驱动电路会失配"
+      - "识别：测 CTR（给定 If 测 Ic），或看 Vf 是否一致"
+
+  fuse:
+    display: 保险丝 / 自恢复保险丝
+    lcsc_category: [一次性保险丝, 自恢复保险丝(PTC)]
+    mall_params_observed: [类型, 额定电流, 额定电压, 分断能力, 保持电流/触发电流]
+    mall_filter_extra: [品牌, 封装, 熔断速度(快断/慢断)]
+    required_to_specify: [type, i_rating, v_rating, package, speed]
+    substitute_equivalence: "类型相同 + 额定电流相同 + 电压>= + 封装兼容 = 可替换"
+    critical:
+      - key: type
+        unit: null
+        cmp: enum_equal
+        conf: S
+        note: "一次性保险丝 vs 自恢复 PTC 不可互换（PTC 有阻抗，且会反复动作）"
+      - key: i_rating
+        unit: A
+        cmp: range_band
+        conf: E
+        note: |
+          额定电流取工作电流的 1.3~2x（太小误动作，太大不起保护）。
+          PTC 的 Ihold(保持电流) 才是额定值，Itrip(触发电流) 通常是 2x Ihold。
+      - key: v_rating
+        unit: V
+        cmp: gte_margin
+        margin: 1.5
+        conf: E
+        note: "分断时保险丝两端承受全部电压，电压不足会拉弧不断"
+      - key: package
+        unit: null
+        cmp: enum_compatible
+        conf: S
+        note: "0603/0805/1206/插件 不可混"
+      - key: speed
+        unit: null
+        cmp: enum_compatible
+        conf: D
+        note: "快断(F)用于半导体保护，慢断(T)用于电机/容性负载启动"
+    relaxable:
+      - {key: brand, note: "实测 0805 PTC 500mA 20 起 0.2332；1206 2A 5 起 0.4949"}
+      - {key: 分断能力, note: "低压小电流场合可放宽"}
+    upgrade_rules:
+      - {id: fuse_ptc, when: "需要可恢复/免维护", do: "一次性 -> PTC 自恢复", cost: "1.5~3x", note: "PTC 有阻抗压降与温度依赖"}
+      - {id: fuse_slow, when: "容性/感性启动", do: "快断 -> 慢断", conf: E}
+    forbid_rules:
+      - "严禁额定电流按工作电流 1:1 选（必误动作）"
+      - "严禁用 PTC 替代精密保护（PTC 动作慢、阻抗随温度漂移）"
+      - "严禁电压等级不足（断不开会持续拉弧）"
+    price_band:
+      ref: "0805 PTC 6V/500mA"
+      tiers_rmb: [{qty: 20, price: 0.2332}]
+      note: "1206 PTC 2A 5 起 0.4949"
+      conf: M
+    default_parts:
+      - {mpn: "SMD0805-050-6", brand: "R+O(宏嘉诚)", code: "C46640983", spec: "PTC 6V Ihold 500mA Itrip 1A 0805", note: "USB/小板保护"}
+      - {mpn: "SMD1206-200-12", brand: "通用", code: "—", spec: "PTC 12V 2A 1206", note: "大电流"}
+    risk_notes:
+      - "PTC 参数认知错误：Ihold 才是额定，很多人按 Itrip 选导致误动作"
+      - "翻新：保险丝属一次性件，拆机品已疲劳，动作特性漂移"
+
+  switch_button:
+    display: 按键 / 轻触开关
+    lcsc_category: [轻触开关, 拨动开关, 按钮开关]
+    mall_params_observed: [开关类型, 尺寸, 额定电流, 额定电压, 操作力]
+    mall_filter_extra: [品牌, 引脚数, 是否带灯, 寿命]
+    required_to_specify: [type, size, mounting, pin_spacing]
+    substitute_equivalence: "类型相同 + 尺寸/脚距兼容 + 电参数>= = 可替换"
+    critical:
+      - key: type
+        unit: null
+        cmp: enum_equal
+        conf: S
+        note: "轻触(自复位)/自锁/拨动/船型 不可互换（行为完全不同）"
+      - key: size
+        unit: null
+        cmp: enum_compatible
+        conf: S
+        note: "6x6 / 12x12 / 3x6 等；外壳开孔与按键帽高度相关"
+      - key: pin_spacing
+        unit: null
+        cmp: enum_compatible
+        conf: S
+        note: "6x6 常见 4.5x6.5mm 与 5.0x? 等不同脚距，PCB 孔位不同"
+      - key: rated_current
+        unit: A
+        cmp: gte_margin
+        margin: 1.5
+        conf: E
+        note: "轻触开关仅信号级（50mA 常见），不能直接切负载"
+    relaxable:
+      - {key: brand, note: "实测 6x6x5 金航标 50:0.1153/2000:0.074"}
+      - {key: 操作力, note: "150~260gf 手感差异，非关键"}
+      - {key: 寿命, note: "民用 10 万次足够"}
+    upgrade_rules:
+      - {id: sw_sealed, when: "防水/防尘", do: "普通 -> 密封型", cost: "2~5x"}
+      - {id: sw_longlife, when: "高频操作", do: "升寿命等级", cost: "1.5~2x"}
+    forbid_rules:
+      - "严禁轻触开关直接切负载（触点会烧蚀粘连）"
+      - "严禁自复位/自锁混用"
+    price_band:
+      ref: "6x6x5 轻触开关 贴片"
+      tiers_rmb: [{qty: 50, price: 0.1153}, {qty: 2000, price: 0.074}]
+      conf: M
+    default_parts:
+      - {mpn: "KH-6X6X5H-STM", brand: "金航标", code: "C2837531", spec: "6x6x5 贴片轻触", note: "最通用按键"}
+    risk_notes:
+      - "轻触开关手感差异大：廉价品操作力不稳、回弹差"
+      - "翻新/拆机件触点氧化，表现为接触不良（需多次按压才响应）"
+
+  led:
+    display: LED 指示灯
+    lcsc_category: [发光二极管(LED)]
+    mall_params_observed: [颜色, 波长, 正向压降(Vf), 正向电流, 发光角度, 亮度]
+    mall_filter_extra: [品牌, 封装, 是否高亮]
+    required_to_specify: [color, vf, current, package, viewing_angle]
+    substitute_equivalence: "颜色相同 + 封装相同 + Vf 可比 + 亮度够 = 可替换"
+    critical:
+      - key: color
+        unit: null
+        cmp: enum_equal
+        conf: S
+        note: "红/绿/蓝/白/黄 波长与 Vf 差异大（红 1.8~2.2V，蓝白 2.8~3.4V）"
+      - key: vf
+        unit: V
+        cmp: range_covers
+        conf: D
+        note: "限流电阻按 Vf 算；Vf 不同则同一电阻下电流差很多"
+      - key: package
+        unit: null
+        cmp: enum_equal
+        conf: S
+        note: "0603/0805/1206/3mm/5mm 不可混"
+      - key: current
+        unit: A
+        cmp: range_band
+        conf: D
+        note: "常规 20mA；指示灯实际 2~5mA 足够（省电且亮度够）"
+    relaxable:
+      - {key: brand, note: "实测 0603 红 100:0.01608/4000:0.00992"}
+      - {key: 亮度, note: "指示灯可放宽（不同批次亮度差 2~3 倍可接受）"}
+      - {key: 波长, note: "非产品外观要求可放宽"}
+    upgrade_rules:
+      - {id: led_highbright, when: "低电流要亮度", do: "普通 -> 高亮型（同电流更亮）", cost: "1.2~2x"}
+    forbid_rules:
+      - "严禁无限流电阻直接接电源（必烧）"
+      - "严禁颜色/封装混用（外观与焊盘都不对）"
+    price_band:
+      ref: "0603 红色 LED"
+      tiers_rmb: [{qty: 100, price: 0.01608}, {qty: 4000, price: 0.00992}]
+      conf: M
+    default_parts:
+      - {mpn: "GL0603UR01", brand: "通用", code: "C51933292", spec: "0603 红 Vf 1.8~2.2V 20mA 620-625nm", note: "最便宜指示灯"}
+    risk_notes:
+      - "亮度/波长批次差异大：同型号不同批次色差明显，外观件要注意"
+      - "翻新极少（单价太低），但存在混 bin 现象（不同亮度混发）"
+
+  # ------------------------------------------------- 数据转换 / 存储 ----
+  adc_dac:
+    display: ADC / DAC
+    lcsc_category: [模数转换芯片ADC, 数模转换芯片DAC]
+    mall_params_observed: [分辨率, 采样率, 通道数, 接口类型, 供电电压, 基准电压]
+    mall_filter_extra: [品牌, 封装, 内置基准]
+    required_to_specify: [resolution, sample_rate, channels, interface, supply, package]
+    substitute_equivalence: "分辨率>= + 采样率>= + 通道数>= + 接口相同 + 供电覆盖 = 可替换（需重写驱动）"
+    critical:
+      - key: resolution
+        unit: bit
+        cmp: gte
+        conf: S
+        note: "位数决定理论精度；实际有效位 ENOB 常比标称低 1~3 位"
+      - key: sample_rate
+        unit: Hz
+        cmp: gte_margin
+        margin: 2.0
+        conf: E
+        note: "按奈奎斯特 2x 以上，工程取 5~10x 更稳"
+      - key: channels
+        unit: null
+        cmp: gte
+        conf: S
+        note: "单端 vs 差分要分清；差分输入不能用单端芯片替代"
+      - key: interface
+        unit: null
+        cmp: enum_equal
+        conf: S
+        note: "I2C/SPI/并口 驱动完全不同"
+      - key: supply
+        unit: V
+        cmp: range_covers
+        conf: D
+      - key: vref
+        unit: V
+        cmp: enum_compatible
+        conf: D
+        note: "内置基准 vs 外部基准；基准决定绝对精度，替换后必须重标定"
+    conditional_critical:
+      - when: "精密测量"
+        keys: [inl, offset_error, gain_error, noise]
+        conf: E
+      - when: "多路同步采样"
+        keys: [同时采样能力]
+        conf: E
+    relaxable:
+      - {key: brand, note: "实测 ADS1115 TI 1:7.79；国产兼容片可省 50%"}
+      - {key: 采样率, note: "慢速测量 100Hz 足够"}
+    upgrade_rules:
+      - {id: adc_builtin, when: "省成本/精度要求低", do: "用 MCU 内置 ADC", cost: "0"}
+      - {id: adc_ext, when: "高精度/多通道", do: "外置 ADC", cost: "5~30x"}
+    forbid_rules:
+      - "严禁差分/单端混用"
+      - "严禁接口不同的芯片当 pin 兼容替换（驱动完全不兼容）"
+      - "严禁忽略基准源变化（同分辨率不同基准 = 不同量程）"
+    price_band:
+      ref: "ADS1115 16bit 4ch I2C"
+      tiers_rmb: [{qty: 1, price: 7.79}]
+      conf: M
+    default_parts:
+      - {mpn: "ADS1115IDGSR", brand: "TI", code: "C37593", spec: "16bit 860Hz 4ch I2C", note: "常用外置 ADC"}
+      - {mpn: "TP4056", brand: "UMW", code: "C725790", spec: "锂电池充电 4~6.5V 1A 4.2V", note: "充电管理常用"}
+    risk_notes:
+      - "国产兼容 ADC 的 INL/噪声常差于原厂，精密场合必须实测"
+      - "翻新：MSOP-10 等小封装打磨片多"
+
+  level_shifter:
+    display: 电平转换
+    lcsc_category: [电平转换芯片]
+    mall_params_observed: [通道数, 传输速率, 供电电压, 方向控制, 输出类型]
+    mall_filter_extra: [品牌, 封装, 是否双向]
+    required_to_specify: [channels, direction, vcca, vccb, speed, package]
+    substitute_equivalence: "通道数>= + 方向类型相同 + 电压范围覆盖 + 速率够 + 封装兼容 = 可替换"
+    critical:
+      - key: direction
+        unit: null
+        cmp: enum_equal
+        conf: S
+        note: "单向/双向/自动方向不可互换；I2C 必须用双向型"
+      - key: vcca
+        unit: V
+        cmp: range_covers
+        conf: D
+        note: "A 侧(低压侧)与 B 侧(高压侧)不能接反"
+      - key: vccb
+        unit: V
+        cmp: range_covers
+        conf: D
+      - key: speed
+        unit: bps
+        cmp: gte
+        conf: D
+        note: "TXS 类 60Mbps；I2C 只需 400k~1M，但要注意上拉"
+      - key: channels
+        unit: null
+        cmp: gte
+        conf: S
+      - key: package
+        unit: null
+        cmp: enum_compatible
+        conf: S
+    conditional_critical:
+      - when: "I2C 总线"
+        keys: [双向, 开漏, 上拉需求]
+        tighten: "TXS 类内部有上拉但弱，长线/多设备要外加"
+        conf: E
+      - when: "高速 SPI"
+        keys: [速率, 传播延迟]
+        conf: E
+    relaxable:
+      - {key: brand, note: "实测 TXS0108E TI 1:2.48/30:1.63"}
+      - {key: 通道数, note: "多余通道闲置即可"}
+    upgrade_rules:
+      - {id: ls_discrete, when: "单路/低速/极低成本", do: "用 MOS + 电阻搭电平转换", cost: "0.1x", conf: E}
+    forbid_rules:
+      - "严禁 A/B 侧接反（会倒灌）"
+      - "严禁单向型用于 I2C"
+      - "严禁用电阻分压替代 3.3V->5V 上拉（无法驱动高电平）"
+    price_band:
+      ref: "TXS0108E 8 通道双向"
+      tiers_rmb: [{qty: 1, price: 2.48}, {qty: 30, price: 1.63}]
+      conf: M
+    default_parts:
+      - {mpn: "TXS0108EPWR", brand: "TI", code: "C17206", spec: "8ch 双向 60Mbps", note: "通用双向"}
+    risk_notes:
+      - "TXS 类内部上拉弱，长线 I2C 会通信失败（需外加 2.2~4.7k 上拉）"
+      - "翻新/国产兼容片：速率与驱动能力下降"
+
+  memory:
+    display: EEPROM / NOR Flash
+    lcsc_category: [EEPROM, NOR FLASH]
+    mall_params_observed: [存储容量, 接口类型, 供电电压, 时钟频率, 封装]
+    mall_filter_extra: [品牌, 页大小, 擦写寿命]
+    required_to_specify: [type, capacity, interface, supply, package]
+    substitute_equivalence: "类型相同 + 容量>= + 接口相同 + 供电覆盖 + 封装兼容 = 可替换（需改地址/页参数）"
+    critical:
+      - key: type
+        unit: null
+        cmp: enum_equal
+        conf: S
+        note: "EEPROM(字节可写) vs NOR Flash(块擦除) 用途不同，不可互换"
+      - key: interface
+        unit: null
+        cmp: enum_equal
+        conf: S
+        note: "I2C / SPI / Microwire 驱动不同"
+      - key: capacity
+        unit: bit
+        cmp: gte
+        conf: D
+        note: "大容量可替代小容量（同接口），但地址空间/指令集要改"
+      - key: supply
+        unit: V
+        cmp: range_covers
+        conf: D
+        note: "1.8V/2.5V/3.3V/5V 系列"
+      - key: package
+        unit: null
+        cmp: enum_compatible
+        conf: S
+        note: "SOP-8/TSSOP-8/DFN/UDFN 焊盘不同；同 SOP-8 的 24C02 与 W25Q 引脚不同"
+    relaxable:
+      - {key: brand, note: "实测 24C02 ST 5:0.7923；W25Q64 Winbond 1:11.71"}
+      - {key: 速度, note: "EEPROM 100kHz 足够多数场合"}
+    upgrade_rules:
+      - {id: mem_big, when: "容量不足", do: "升容量（同接口同封装优先）", cost: "1.1~2x"}
+    forbid_rules:
+      - "严禁 EEPROM 与 Flash 互换（写入模型完全不同）"
+      - "严禁忽略页大小/扇区大小（Flash 擦除单位不同会导致驱动错误）"
+    price_band:
+      ref: "24C02 SOP-8 I2C EEPROM"
+      tiers_rmb: [{qty: 5, price: 0.7923}]
+      note: "W25Q64JVSSIQ 64Mbit 1 起 11.71"
+      conf: M
+    default_parts:
+      - {mpn: "M24C02-RMN6TP", brand: "ST", code: "C83836", spec: "2Kbit I2C EEPROM SOP-8", note: "参数存储"}
+      - {mpn: "W25Q64JVSSIQ", brand: "Winbond", code: "C179171", spec: "64Mbit SPI NOR 133MHz", note: "程序/数据存储"}
+    risk_notes:
+      - "同 MPN 多 C 编号且库存差异大（实测 W25Q64 C179171 有货 1383，另一 C 号库存 0）→ 必须按 C 号去重选有货者"
+      - "页面备注出现'涂标''批次'字样 = 丝印被涂改，属散新/翻新信号"
+      - "打磨片：容量虚标（标 64Mbit 实为 32Mbit），识别读 JEDEC ID"
+
+  power_module:
+    display: 隔离/成品电源模块
+    lcsc_category: [隔离电源模块, DC-DC电源模块]
+    mall_params_observed: [输入电压, 输出电压, 输出功率, 隔离电压, 效率]
+    mall_filter_extra: [品牌, 封装, 输出路数]
+    required_to_specify: [vin, vout, power, isolation, package]
+    substitute_equivalence: "输入/输出/功率/隔离 满足 + 封装(脚位)兼容 = 可替换"
+    critical:
+      - key: vin
+        unit: V
+        cmp: range_covers
+        conf: D
+        note: "定压输入模块(如 5V±10%)不能宽压用；宽压模块价格更高"
+      - key: vout
+        unit: V
+        cmp: equal_exact
+        conf: S
+      - key: power
+        unit: W
+        cmp: gte_margin
+        margin: 1.3
+        conf: E
+        note: "模块标称功率是 25℃ 且良好散热下；实际常只能 70% 使用"
+      - key: isolation
+        unit: V
+        cmp: gte_margin
+        margin: 1.2
+        conf: E
+        note: "1kV/1.5kV/3kV 隔离；安规场合看认证"
+      - key: package
+        unit: null
+        cmp: enum_equal
+        conf: S
+        note: "SIP/DIP 脚位排列不同"
+    relaxable:
+      - {key: brand, note: "实测 B0505S-1W EVISUN 1:3.92/34:2.49"}
+      - {key: 效率, note: "小功率隔离模块 70~80% 正常"}
+    upgrade_rules:
+      - {id: pm_wide, when: "输入波动大", do: "定压 -> 宽压输入", cost: "1.5~2.5x"}
+      - {id: pm_discrete, when: "量大/成本敏感", do: "改用分立隔离 DCDC 方案", cost: "0.5x 但开发成本高", conf: E}
+    forbid_rules:
+      - "严禁定压模块用于宽压输入（会烧或不起振）"
+      - "严禁功率顶格使用（隔离模块散热差，70% 以内）"
+    price_band:
+      ref: "B0505S-1W 5V 转 5V 隔离 1W"
+      tiers_rmb: [{qty: 1, price: 3.92}, {qty: 34, price: 2.49}]
+      conf: M
+    default_parts:
+      - {mpn: "B0505S-1W", brand: "EVISUN(易微)", code: "C7465127", spec: "1W 4.5~5.5Vin 79% 隔离", note: "最常用隔离模块"}
+    risk_notes:
+      - "隔离模块虚标：隔离电压标 3kV 实测 1kV 就击穿"
+      - "廉价模块空载/轻载效率极低、纹波大"
+
+  digital_isolator:
+    display: 数字隔离器
+    lcsc_category: [数字隔离器]
+    mall_params_observed: [通道数, 隔离电压, 传输速率, 供电电压, 方向]
+    mall_filter_extra: [品牌, 封装, 共模瞬态抗扰度(CMTI)]
+    required_to_specify: [channels, direction, isolation_voltage, data_rate, package]
+    substitute_equivalence: "通道数与方向配置相同 + 隔离电压>= + 速率>= + 封装兼容 = 可替换"
+    critical:
+      - key: isolation_voltage
+        unit: V
+        cmp: gte_margin
+        margin: 1.2
+        conf: E
+        note: "按安规要求选（常见 2.5kVrms/5kVrms）；加强绝缘 vs 基本绝缘不可混"
+      - key: channels
+        unit: null
+        cmp: gte
+        conf: S
+      - key: direction
+        unit: null
+        cmp: enum_compatible
+        conf: S
+        note: "单向/双向(两路对向)配置必须匹配；方向接反等于不工作"
+      - key: data_rate
+        unit: bps
+        cmp: gte
+        conf: D
+        note: "数字隔离器远快于光耦（Mbps~100Mbps）；但要注意传播延迟与脉宽失真"
+      - key: supply
+        unit: V
+        cmp: range_covers
+        conf: D
+        note: "两侧可不同电压（如 3.3V/5V），要分别确认 VDD1/VDD2"
+      - key: package
+        unit: null
+        cmp: enum_compatible
+        conf: S
+        note: "SOIC-8/16、SSOP、QFN；爬电距离不同"
+    conditional_critical:
+      - when: "强干扰/电机驱动"
+        keys: [cmti]
+        tighten: "CMTI 需 > 25kV/us"
+        conf: E
+      - when: "安规认证场合"
+        keys: [认证, 爬电距离, 间隙]
+        conf: S
+    relaxable:
+      - {key: brand, note: "国产数字隔离器（如纳芯微/川土微）价格显著低于 TI/ADI"}
+      - {key: 速率, note: "低速信号 1Mbps 足够"}
+    upgrade_rules:
+      - {id: iso_fast, when: "高速/多通道", do: "光耦 -> 数字隔离器", cost: "1.5~3x", note: "速度与寿命都更好"}
+      - {id: iso_cheap, when: "低成本低速", do: "用光耦", cost: "0.3~0.6x", conf: E}
+    forbid_rules:
+      - "严禁隔离电压降额（安规红线）"
+      - "严禁方向配置不匹配替换"
+      - "严禁用非隔离器件替代隔离器件"
+    price_band:
+      ref: "数字隔离器 2 通道 SOIC-8"
+      note: "本次未取到实测价，量级参考 2~8 元/片，需实测"
+      conf: E
+    default_parts:
+      - {mpn: "ADuM1201 / ISO7721", brand: "ADI / TI", code: "—", spec: "2ch 25~100Mbps 2.5kVrms", note: "工业隔离"}
+      - {mpn: "NSI8221 / CA-IS3722", brand: "纳芯微 / 川土微", code: "—", spec: "2ch 国产替代", note: "降本选项"}
+    risk_notes:
+      - "国产兼容隔离器隔离电压虚标（标 5kV 实测 2kV 击穿）——安规件建议用有认证的原厂"
+      - "封装爬电距离不足：SOIC-8 窄体与宽体外观接近，安规距离差一倍"
+
+# ------------------------------------------------------------ 跨品类 ----
+cross_family_heuristics:
+  description: |
+    跨品类通用选型启发式 —— 在"指标满足"的候选中做二次排序的规则集，
+    与 family 内的硬约束过滤配合使用（先硬滤，再打分）。
+  ordering_rules:
+    - id: availability_first
+      weight: hard
+      rule: 只保留"立创现货库存 > MOQ 需求"或"有明确交期"的候选；库存 0 的降为备选
+      rationale: 配单的第一诉求是买得到
+    - id: in_production
+      weight: hard
+      rule: 剔除"商品已停售"/EOL/停产通知的料
+      rationale: "实测 S8050 等经典料已显示停售，照抄 BOM 会买不到"
+    - id: multi_supplier
+      weight: 0.15
+      rule: 同规格有 >=2 个品牌可选者加分（替换弹性）
+      rationale: 单一供应商断货风险
+    - id: de_duplicate_by_code
+      weight: hard
+      rule: 同 MPN 可能有多个 C 编号，必须按 C 号去重并保留有货者
+      rationale: 实测 W25Q64JVSSIQ 两个 C 号一个 1383 一个有 0
+    - id: common_package
+      weight: 0.10
+      rule: 封装通用度打分：0603/0805/SOP-8/SOT-23 > 特殊封装
+      rationale: 好焊、好换料、钢网通用
+    - id: popularity
+      weight: 0.10
+      rule: 销量/库存量级（库存 >100K 视为通用料）
+      rationale: 通用料补货快、价格稳
+    - id: price_at_quantity
+      weight: 0.40
+      rule: 必须用"目标采购数量"对应的阶梯价比较，不能用 1 片价
+      rationale: "实测阶梯价差可达 5~10x（如 24C02 5 片 0.79 vs 大批量更低）"
+    - id: brand_relaxable
+      weight: 0.15
+      rule: 品牌不参与硬过滤；同 MPN 同规格下优先低价品牌
+      rationale: "实测同 MPN 价差 3~15x：SS34 15x、1N4007 7x、AMS1117 5x、AO3400 3.2x"
+    - id: param_condition_aware
+      weight: hard
+      rule: 比较参数时必须带上测试条件（Vgs/测试电流/频率），条件不同的数值不可直接比
+      rationale: "实测 AO3400A 同 MPN：48mΩ@2.5V vs 17mΩ@10V；LM393 tpd 300ns vs 1.3us"
+    - id: prefer_no_new_topology
+      weight: 0.05
+      rule: 同等条件下优先"外围元件不变"的替代（省调试与验证）
+      rationale: DCDC/晶振等替换常需重算外围，验证成本高于料价差
+  scoring_formula: |
+    score = 0.40 * price_score      # 归一化到候选集最低价
+          + 0.15 * brand_score      # 低价品牌加分，但不为 0 分（质量下限）
+          + 0.10 * package_score    # 通用封装加分
+          + 0.10 * popularity_score # 库存/销量量级
+          + 0.15 * supplier_score   # 多供应商
+          + 0.05 * inertia_score    # 外围不变
+          + 0.05 * risk_score       # 无翻新/涂标/停售信号
+    任一 hard 规则不通过 -> 直接剔除，不参与打分。
+  risk_signals:
+    - signal: 价格显著低于同规格市场价（<30%）
+      meaning: 翻新/散新/虚标概率高
+      action: 降权或要求抽测
+    - signal: 页面出现"停售""停产""最后一批"
+      meaning: EOL
+      action: 剔除，除非确认库存足够本次用量
+    - signal: 页面备注含"涂标""翻新""散新""批次混"
+      meaning: 丝印被涂改，来源不可靠
+      action: 剔除
+    - signal: 同 MPN 同品牌但 C 号不同、库存差异极大
+      meaning: 不同批次/渠道
+      action: 选有货者，并在 BOM 上标 C 号
+    - signal: 参数缺失关键项（如 MOS 不标 Rds(on) 测试条件）
+      meaning: 无法机械比对
+      action: 标记"待人工确认"，不自动替代
+  substitution_workflow:
+    - step: 1
+      do: 从原 BOM 提取 MPN + 关键参数（用 datasheet 补全商城缺失项）
+    - step: 2
+      do: 按 family 的 critical 列表做硬约束过滤（含余量系数）
+    - step: 3
+      do: 对通过者做"条件感知"参数比较（同条件才可比）
+    - step: 4
+      do: 按目标数量取阶梯价，排序
+    - step: 5
+      do: 应用 risk_signals 剔除/降权
+    - step: 6
+      do: 输出 top3 候选 + 每个候选的差异清单（哪些参数变了、影响什么）
+    - step: 7
+      do: 人工确认高风险品类（电源、MCU、晶振、隔离）后才可下单
+  confidence_legend:
+    S: 标准/规范/引脚定义等客观事实
+    D: datasheet 明示参数
+    E: 工程经验值（本文件已标注"经验"）
+    M: 本次实测（立创商城页面，2026-11-04 快照，人民币含税）
+
