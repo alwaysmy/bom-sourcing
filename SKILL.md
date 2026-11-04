@@ -32,7 +32,7 @@ python scripts/lcsc.py search "10k 0603 1%" --sort sales_desc --limit 10
 python scripts/lcsc.py price C25804 --qty 100
 python scripts/lcsc.py compare C25804 C98220 --qty 100
 
-# 4) 找替代料（含参数差异，人民币价格已回填）
+# 4) 找替代料（相似度 + 参数差异 + 人民币阶梯价 + 国产替代）
 python scripts/lcsc.py alternate C8734 --qty 100
 ```
 
