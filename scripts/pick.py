@@ -29,7 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lcsc import Lcsc, cwidth, money, pad, price_at  # noqa: E402
 from spec import (  # noqa: E402
     parse_amp, parse_farad, parse_freq, parse_henry, parse_ohm, parse_tol,
-    parse_volt, parse_watt, parse_package, pkg_key,
+    parse_volt, parse_watt, parse_package, pkg_key, function_check,
 )
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -50,7 +50,7 @@ CAT_JSON = DATA_DIR / "categories.json"
 ALIASES = {
     "vout":     (["输出电压", "Vout"], "volt", "eq"),
     "vin":      (["工作电压", "输入电压", "Vin", "供电电压"], "volt", "in"),
-    "iout":     (["输出电流", "最大输出电流", "连续漏极电流", "Iout", "Id"], "amp", "ge"),
+    "iout":     (["输出电流", "最大输出电流", "连续漏极电流", "最大连续电流", "Iout", "Id"], "amp", "ge"),
     "iq":       (["静态电流", "静态工作电流", "待机电流", "Iq"], "amp", "le"),
     "vref":     (["基准电压", "Vref"], "volt", "eq"),
     "vdss":     (["漏源电压", "Vdss"], "volt", "ge"),
@@ -109,12 +109,15 @@ QUANT_SYNONYMS = {
 # 无单位数字按家族落到哪个物理量（"找 3.3V 1A 的 LDO" 这类自然语言意图）
 FAMILY_VOLT_ROLE = {
     "ldo": "vout", "dcdc": "vout", "vref": "vout", "adc": "vout",
+    # 负载开关/eFuse：指标是"工作电压区间"（要包含目标电压）+ 最大连续电流
+    "load_switch": "vin", "powerswitch": "vin",
     "tvs": "vrwm", "esd": "vrwm", "mosfet": "vdss", "diode": "vmax",
     "schottky": "vmax", "mlcc": "vmax", "electrolytic": "vmax", "tantalum": "vmax",
     "led": "vf", "crystal": "freq", "opamp": None, "comparator": None,
 }
 FAMILY_AMP_ROLE = {
     "ldo": "iout", "dcdc": "iout", "mosfet": "iout", "diode": "ifwd", "schottky": "ifwd",
+    "load_switch": "iout", "powerswitch": "iout",
 }
 
 # 没有 categories.yaml 时的兜底关键词（立创裸词检索够用）
@@ -339,6 +342,11 @@ def parse_intent(text, family):
         if volt_role:
             # 极性决定语义：输出电压要"是 3.3V"，耐压/漏源电压只要"不低于"
             pol = ALIASES.get(volt_role, ("", "", "eq"))[2]
+            if m.group(2) and pol == "in":
+                # 工作电压是区间参数：「3.3V~21V」要求候选区间**覆盖** [3.3, 21]
+                out.append(Constraint(volt_role, "cover", (float(m.group(1)), float(m.group(2))),
+                                       m.group(0), "V"))
+                continue
             op = "=" if (pol == "eq" and not m.group(2)) else ">="
             out.append(Constraint(volt_role, op, float(m.group(1)), m.group(0), "V"))
     for m in re.finditer(r"(\d+(?:\.\d+)?)\s*(m?A)\b", t):
@@ -378,6 +386,45 @@ def find_keys(rec, quant):
     return hits
 
 
+_UNIT_HINT = {"volt": "V", "amp": "A", "ohm": "Ω", "farad": "F", "henry": "H",
+              "watt": "W", "freq": "Hz", "tol": "%"}
+_NUM_RE = {
+    "volt": re.compile(r"([\d.]+)\s*V\b", re.I),
+    "amp": re.compile(r"([\d.]+)\s*(m|u|µ)?A\b"),
+    "ohm": re.compile(r"([\d.]+)\s*(m|k)?Ω", re.I),
+}
+
+
+def _value_from_name(rec, quant):
+    """从商品名里兜底抽数值。
+
+    立创很多料把关键指标只写在名字里（TPS22919「5.5V、1.5A、90mΩ自保护负载开关」
+    的 `最大连续电流` 只有 8/90 条记录才有），paramLinkedMap 反而缺。
+    只按物理量做严格单位匹配，抽不到就返回 None（不能瞎猜）。
+    """
+    kind = ALIASES.get(quant, ("", "", ""))[1]
+    text = " ".join(x for x in (rec.get("name") or "", rec.get("type") or "") if x)
+    if not text:
+        return None
+    rx = _NUM_RE.get(kind)
+    if not rx:
+        return None
+    m = rx.findall(text)
+    if not m:
+        return None
+    if kind == "volt":
+        # 名字里出现多个电压时取最大（"2.7 - 18V" 取 18；"1V至5.5V" 取 5.5）
+        return max(float(x) for x in m)
+    if kind == "amp":
+        vals = [float(v) * {"m": 1e-3, "u": 1e-6, "µ": 1e-6, "": 1.0}.get(p or "", 1.0)
+                for v, p in m]
+        return max(vals)
+    if kind == "ohm":
+        vals = [float(v) * {"m": 1e-3, "k": 1e3, "": 1.0}.get(p or "", 1.0) for v, p in m]
+        return max(vals)
+    return None
+
+
 def check_one(rec, c):
     """返回 (状态, 说明)；状态 ∈ ok/warn/fail/unknown。"""
     if c.quant == "_pkg":
@@ -385,7 +432,12 @@ def check_one(rec, c):
         return ("ok", pk) if pkg_key(pk) == pkg_key(c.value) else ("fail", pk)
     hits = find_keys(rec, c.quant)
     if not hits:
-        return ("unknown", "")
+        # paramLinkedMap 里没有 → 再试商品名（很多料的电流/电压只写在名字里）
+        nv = _value_from_name(rec, c.quant)
+        if nv is None:
+            return ("unknown", "")
+        kind_hint = ALIASES[c.quant][1]
+        hits = [("商品名", f"{nv:.6g}{_UNIT_HINT.get(kind_hint, '')}")]
     kind = ALIASES[c.quant][1]
     polarity = ALIASES[c.quant][2]
     if kind == "text" or polarity == "text":
@@ -399,6 +451,18 @@ def check_one(rec, c):
             continue
         # 区间参数（5.5V~36V）对 vin 要"包含"；其它取上限
         if c.quant in ("vin", "vmax", "vrwm", "vdss") and polarity == "in":
+            if isinstance(c.value, tuple):
+                # 「3.3V~21V」= 候选区间必须**覆盖**该区间（两头都要满足）
+                lo_need, hi_need = c.value
+                if key == "商品名":
+                    # 名字里只能抽到一个电压（通常就是上限），只能校验上界
+                    ok = hi >= hi_need * 0.98
+                else:
+                    ok = lo <= lo_need * 1.02 and hi >= hi_need * 0.98
+                if ok:
+                    return ("ok", f"{key}={raw}")
+                best = best or ("fail", f"{key}={raw}")
+                continue
             ok = lo <= c.value <= hi if hi != lo else c.value <= hi
             if ok:
                 return ("ok", f"{key}={raw}")
@@ -463,6 +527,25 @@ def dedupe_by_model(recs):
 
 
 # --------------------------------------------------------------------- 输出
+def function_gate(rec, info, family=None):
+    """功能符合性闸门：参数满足 ≠ 功能对。
+
+    立创的 catalog 归类很粗（`969 功率电子开关` 里同时挂着降压转换器、过压保护开关、
+    电子保险丝、负载开关、理想二极管 ORing），`productType` 更是 catalog 级标签、零区分力。
+    所以最后必须用商品名里的功能词再判一次。
+
+    三态判定（关键：**正向未命中 ≠ 功能不符**，很多料 name 只有型号或纯参数）：
+      ok        正向命中且无反向 → 功能确认
+      mismatch  只命中反向        → 直接剔除
+      conflict  正反都命中        → 名称歧义，保留但必须人工确认
+      unknown   都没命中          → 功能未确认（保留，标注需查手册）
+    """
+    name = " ".join(x for x in (rec.get("name") or "", rec.get("type") or "") if x)
+    pos = (info or {}).get("function_keywords") or []
+    neg = (info or {}).get("exclude_keywords") or []
+    return function_check(name, pos, neg, family=family)
+
+
 def param_brief(rec, info, limit=4):
     keys = (info or {}).get("key_constraints") or []
     out = []
@@ -522,31 +605,193 @@ def channel_hint(qty, unit_price=None):
     return f"批量：走立创阶梯价，同时把型号丢给 1688 询盘比价（1688 阶梯价不公开，需人工问）。{p}"
 
 
-_ASSORT_RE = re.compile(r"芯片包|元件包|套装|套餐|组合装|混装|样品盒|样品包|整盒|一盒|散装包")
+_ASSORT_RE = re.compile(
+    r"芯片包|元件包|阻容包|元器件包|套装|套餐|组合装|混装|样品盒|样品包|整盒|一盒|散装包|分类盒|\d{1,3}\s*种")
+# 开发板/套件不是元件，比价时必须剔除（STM32 这类料淘宝前几名常是开发板）
+_DEVBOARD_RE = re.compile(r"开发板|最小系统|核心板|面包板|仿真器|下载器|烧录器|套件|同款科协")
+# 系列链接：一条链接覆盖多个阻值/容值，标价是"一包/一份"的起价，不能当单只价。
+# 只认电阻/电容单位，且左边界不能紧贴字母数字 —— 否则 "AO3400A/30V/5.8A" 这类型号里的
+# 数字会被当成数值，把单只料误判成"系列"。
+_RC_VAL_RE = re.compile(
+    r"(?<![A-Za-z0-9.])\d+(?:\.\d+)?\s*(?:[RrKkMm]\d*|Ω|欧|[uUnNpP]F)(?![A-Za-z0-9])")
+# 阻值连写（"1k2k4.7k10k47k100k"）：没有空格分隔，靠单位字母切
+_GLUED_VAL_RE = re.compile(r"\d+(?:\.\d+)?[kKmMrR](?![A-Za-z])")
+# 容值连写（"1U1.5U2.2U…10UF15UF"）：U/N/P 后面紧跟数字
+_GLUED_CAP_RE = re.compile(r"\d+(?:\.\d+)?\s*[UuNnPp](?=[\d.])")
+
+SAMPLE_OK_LIMIT = 10   # 包装 <= 10 只算"小包装/可打样"
+BATCH_QTY = 100        # 超过视为批量，默认不查淘宝
+
+
+def _looks_series(title):
+    """标题像"一条链接挂多个阻值/容值"（系列链接）时返回 True。
+
+    这类链接的标价是"一包/一份"的起价，按单只价比较会把淘宝算成贵几十倍。
+    实测 5 组样本（60 条标题）上：阈值为 2 时阻容系列全部命中，芯片/型号标题 0 个命中。
+    """
+    if "系列" in title:
+        return True
+    n = (len(_RC_VAL_RE.findall(title))
+         + len(_GLUED_VAL_RE.findall(title))
+         + len(_GLUED_CAP_RE.findall(title)))
+    return n >= 2
 
 
 def _market_usable(x):
-    """淘宝/1688 里"混装包/套装"的单只价没有可比性，先剔掉；conf=low 的也不要用。"""
-    if _ASSORT_RE.search(x.get("title") or ""):
+    """淘宝/1688 里"混装包/套装/开发板"的单只价没有可比性，先剔掉；conf=low 的也不要用。"""
+    title = x.get("title") or ""
+    if _ASSORT_RE.search(title):
+        return False
+    if _DEVBOARD_RE.search(title):
+        return False
+    if (x.get("unit_note") or "").startswith("数量区间"):
         return False
     if str(x.get("unit_confidence") or "").lower() == "low":
         return False
     return True
 
 
-def market_compare(picked, args):
-    """拿 pick 出来的型号去淘宝/1688 摸一下零售单只价，判断渠道。"""
-    import time as _t
+def _shop_type(shop, badges=None):
+    """店铺类型：旗舰店 / 专营店 / 企业店 / 散货配单 / 普通店。"""
+    t = f"{shop or ''} {' '.join(badges or [])}"
+    if "旗舰店" in t:
+        return "旗舰店"
+    if "专营店" in t or "专卖店" in t:
+        return "专营店"
+    if "企业店" in t or "企业购" in t:
+        return "企业店"
+    if re.search(r"配单|一站式|元器件|电子|芯片|半导体", t):
+        return "散货/配单"
+    return "普通店"
+
+
+def _shipping_note(x):
+    """运费提示：只能从标题/店铺标里读到"包邮"，其余按淘宝零售运费给保守区间。"""
+    t = (x.get("title") or "") + "".join(x.get("shop_badges") or [])
+    if "包邮" in t:
+        return "包邮"
+    p = x.get("price_value") or 0
+    if p and p < 1:
+        return "运费另计（≈¥8-12，单价低于运费建议凑单）"
+    return "运费另计（≈¥8-12）"
+
+
+def sample_info(x):
+    """一条淘宝/1688 结果 → 样品可得性。
+
+    返回 {sample_ok, pack, unit_price, pack_text, sample_text, shipping_note,
+          shop_type, assumed, note}
+    `assumed=True` 表示标题没标数量、按"1 只/1 份"计价（可能是整包，需人工核对）。
+    """
+    out = {
+        "sample_ok": False, "pack": None, "unit_price": None, "pack_text": "—",
+        "sample_text": "—", "shipping_note": _shipping_note(x),
+        "shop_type": _shop_type(x.get("shop"), x.get("shop_badges")),
+        "assumed": False, "note": x.get("unit_note") or "",
+    }
+    title = x.get("title") or ""
+    if _DEVBOARD_RE.search(title):
+        out["sample_text"] = "✗ 开发板/套件"
+        out["note"] = out["note"] or "不是元件"
+        return out
+    if x.get("assortment") or _ASSORT_RE.search(title):
+        out["sample_text"] = "✗ 混装包"
+        out["note"] = "混装/套装（含多个型号），不做单只价"
+        return out
+    if out["note"].startswith("数量区间"):
+        out["sample_text"] = "✗ 区间价"
+        return out
+
+    pack = x.get("pack_qty")
+    if pack:
+        pack = int(pack)
+        out["pack"] = pack
+        out["unit_price"] = x.get("unit_price")
+        out["pack_text"] = f"{pack} 只/份"
+        out["sample_ok"] = pack <= SAMPLE_OK_LIMIT
+        out["sample_text"] = "✓ 可打样" if out["sample_ok"] else f"✗ 最小 {pack} 只"
+        return out
+
+    price = x.get("price_value")
+    if price is None:
+        return out
+    if _looks_series(title):
+        # 一条链接挂多个阻值/容值，标价是"一份"的起价 —— 不给单只价，但可以打样
+        out["sample_ok"] = True
+        out["sample_text"] = "✓ 可打样（系列链接）"
+        out["note"] = "系列链接：多阻值/容值同价，标价为一包起价，单只价看 SKU"
+        return out
+    out["unit_price"] = float(price)
+    out["pack"] = 1
+    out["pack_text"] = "1 只（标题未标数量）"
+    out["sample_ok"] = True
+    out["assumed"] = True
+    out["sample_text"] = "✓ 可买 1 只"
+    return out
+
+
+def _dump_market_raw(args, model, site, items, meta):
+    """把淘宝/1688 原始结果按型号 + 时间戳落盘（--taobao-json DIR）。"""
+    base = getattr(args, "taobao_json", None)
+    if not base:
+        return None
+    try:
+        d = Path(base)
+        d.mkdir(parents=True, exist_ok=True)
+        safe = re.sub(r"[^0-9A-Za-z._-]+", "_", model).strip("_")[:40] or "item"
+        p = d / f"pick_{safe}_{site}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        p.write_text(json.dumps({
+            "model": model, "site": site,
+            "fetched_at": datetime.now().isoformat(timespec="seconds"),
+            "meta": meta, "items": items,
+        }, ensure_ascii=False, indent=1), encoding="utf-8")
+        return p
+    except OSError as e:  # noqa: BLE001
+        print(f"[warn] 原始结果落盘失败（{e}）", file=sys.stderr)
+        return None
+
+
+def taobao_plan(args):
+    """要不要去淘宝比价，返回取样型号数（0 = 不查）。"""
+    if getattr(args, "no_taobao", False):
+        return 0
+    if getattr(args, "taobao", 0) and args.taobao > 0:
+        return args.taobao
+    if args.qty > BATCH_QTY:
+        return 0
+    if args.qty <= SAMPLE_OK_LIMIT:
+        return max(1, getattr(args, "taobao_sample", 0) or 3)
+    return 0
+
+
+def _ratio_text(tb_price, lc_price, site_name="淘宝"):
+    """淘宝/1688 vs 立创的相对价差文案（省 90% 以上改说"便宜 N×"，避免出现"省 100%"）。"""
+    if not tb_price or not lc_price:
+        return ""
+    d = tb_price / lc_price
+    if d >= 1:
+        return f"{site_name} {d:.1f}×"
+    save = 1 - d
+    if d < 0.1:
+        return f"{site_name}便宜 {1 / d:.0f}×"
+    return f"{site_name}省 {save * 100:.0f}%"
+
+
+def market_compare(picked, args, n=None):
+    """拿 pick 出来的型号去淘宝/1688 摸零售单只价 + 样品可得性，判断渠道。"""
     try:
         import taobao as tb  # noqa: PLC0415
     except Exception as e:  # noqa: BLE001
         print(f"\n[warn] 淘宝脚本不可用（{e}），跳过渠道比价", file=sys.stderr)
         return
     site = args.market
-    n = min(args.taobao, len(picked))
-    print(f"\n## 渠道比价（{site}，按销量取样 {n} 个型号；淘宝需浏览器已登录）")
-    header = ["型号", "立创单只", f"{site}最低单只", "对比", f"{site}样本（标题/销量）"]
-    rows = []
+    site_name = "1688" if site == "1688" else "淘宝"
+    n = min(n if n is not None else (args.taobao or 0), len(picked))
+    if n <= 0:
+        return
+    print(f"\n## 渠道比价（{site}，按销量取样 {n} 个型号；{site_name}需浏览器已登录）")
+    header = ["型号", "立创单只", f"{site}单只", "对比", "包装/起订", "样品", "运费", "店铺类型"]
+    rows, concl = [], []
     try:
         br = tb.Bridge()
     except Exception as e:  # noqa: BLE001
@@ -563,43 +808,56 @@ def market_compare(picked, args):
                 res = tb.search_taobao(br, model, "sales", 5, 0)
             items = [x for x in tb.normalize(res["items"], site) if not x.get("sponsored")]
         except Exception as e:  # noqa: BLE001
-            rows.append([model, money(lc) if lc else "?", "—", f"取数失败: {str(e)[:24]}", ""])
+            rows.append([model[:24], money(lc) if lc else "?", "—", f"取数失败: {str(e)[:24]}",
+                         "—", "—", "—", "—"])
             continue
-        priced = [x for x in items if x.get("unit_price")]
-        usable = [x for x in priced if _market_usable(x)]
-        best = min(usable, key=lambda x: x["unit_price"]) if usable else None
-        if not best and priced:  # 只有混装/低置信的价，仍给出来但明确标注
-            best = dict(min(priced, key=lambda x: x["unit_price"]),
-                        title=(min(priced, key=lambda x: x["unit_price"]).get("title") or "")
-                        + "（含混装/低置信，需人工核对）")
-        if not best:
-            if items:
-                kinds = sorted({str(x.get("unit_note") or "无单只价") for x in items})
-                rows.append([model[:24], money(lc) if lc else "?", "区间/混装", "需人工询价",
-                             f"{len(items)} 条无单只价（{kinds[0][:20]}）"])
+        _dump_market_raw(args, model, site, items, {
+            "url": res.get("url"), "sort_applied": res.get("sort_applied"),
+            "total": res.get("total"), "used_fallback": res.get("used_fallback"),
+        })
+        infos = [(x, sample_info(x)) for x in items if _market_usable(x)]
+        with_price = [(x, i) for x, i in infos if i.get("unit_price")]
+        if with_price:
+            x, i = min(with_price, key=lambda xi: xi[1]["unit_price"])
+            lc_s = money(lc) if lc else "?"
+            rows.append([model[:24], lc_s, money(i["unit_price"]),
+                         _ratio_text(i["unit_price"], lc, site_name),
+                         i["pack_text"], i["sample_text"], i["shipping_note"], i["shop_type"]])
+            start = f"{i['pack']} 只起" if i.get("pack") else "标题未标数量"
+            if i.get("sample_ok"):
+                small = (f"{site_name}打样" if (lc and i["unit_price"] < lc)
+                         else f"立创（{site_name}没更便宜）")
+                small_note = f"少量（≤{SAMPLE_OK_LIMIT}）建议{small}"
             else:
-                rows.append([model[:24], money(lc) if lc else "?", "—", "无结果", ""])
-            continue
-        tb_price = best.get("unit_price")
-        ratio = ""
-        if tb_price and lc:
-            d = tb_price / lc
-            ratio = f"淘宝 {d:.1f}×" if d >= 1 else f"淘宝省 {(1 - d) * 100:.0f}%"
-        sample = f"{best.get('title') or ''}"
-        cnt = best.get("sales_text") or ""
-        rows.append([model[:24], money(lc) if lc else "?", money(tb_price) if tb_price else "?",
-                     ratio, (sample[:34] + (f"｜{cnt}" if cnt else ""))])
+                small_note = (f"少量（≤{SAMPLE_OK_LIMIT}）这个链接 {i['pack']} 只起、不能打样，"
+                              "打样要另找小包装/散卖链接")
+            concl.append(f"{model}: {site_name} {money(i['unit_price'])}/只（{start}） vs 立创 {lc_s}/只 —— "
+                         f"{small_note}；批量（>{BATCH_QTY}）走 1688 询盘/原厂代理")
+        elif infos:
+            x, i = infos[0]
+            rows.append([model[:24], money(lc) if lc else "?", "—", "无单只价",
+                         i["pack_text"], i["sample_text"], i["shipping_note"], i["shop_type"]])
+            concl.append(f"{model}: {site_name} {len(infos)} 条可用结果都没有单只价（{i['note'][:28]}）——"
+                         f"立创 {money(lc) if lc else '?'}/只 更靠谱，{site_name}只作打样渠道")
+        else:
+            rows.append([model[:24], money(lc) if lc else "?", "—", "无可用结果", "—", "—", "—", "—"])
+            concl.append(f"{model}: {site_name}无可用结果（{len(items)} 条原始命中，均被混装/开发板规则剔除）")
     widths = [max(cwidth(h), *(cwidth(row[i]) for row in rows)) for i, h in enumerate(header)]
     print("  " + "  ".join(pad(h, widths[i]) for i, h in enumerate(header)))
     for row in rows:
         print("  " + "  ".join(pad(v, widths[i]) for i, v in enumerate(row)))
-    print("  说明：淘宝价是「单只价」估算（标题里带 100个/包 之类已归一，conf 低时人工核对）；"
-          "立创价是含税阶梯价。小批量(<10)淘宝通常更省，批量看立创阶梯 + 免运费门槛。")
+    if concl:
+        print("\n### 样品可得性 / 渠道建议")
+        for line in concl:
+            print(f"  - {line}")
+    print(f"\n  说明：{site} 价是「单只价」估算（标题带 100个/包 已归一；标题没标数量时按 1 只计，"
+          "assumed 见 JSON）。混装包/套装/开发板/数量区间已剔除。"
+          f"{site_name}需登录态，卡片 0 条按登录态过期处理。")
 
 
 def cmd_pick(args):
     cats = load_categories()
-    cli = Lcsc(rate_limit=0.8)
+    cli = Lcsc(rate_limit=getattr(args, "rate", 0.8))
     text = " ".join(args.intent or [])
     family = match_family(args.family or "", cats) if args.family else None
     if family is None and text:
@@ -654,11 +912,25 @@ def cmd_pick(args):
     scanned = len(recs)
 
     ok, fails_all, unknown_dropped = [], [], []
+    func_mismatch, func_unconfirmed, func_conflict = [], [], []
+    info = cat.get("info") or {}
     for r in recs:
         good, fails, unknowns = evaluate(r, constraints)
         if not good:
             fails_all.extend(fails)
-        elif unknowns and not args.allow_unknown:
+            continue
+        # 功能符合性：参数满足 ≠ 功能对（立创 catalog 混装严重）
+        if not getattr(args, "no_func", False):
+            verdict, _pos, _neg, why = function_gate(r, info, cat.get("family"))
+            if verdict == "mismatch":
+                func_mismatch.append(f"{r.get('model')}（{why}）")
+                fails_all.append(f"功能:{why}")
+                continue
+            if verdict == "conflict":
+                func_conflict.append(f"{r.get('model')}（{why}）")
+            elif verdict == "unknown":
+                func_unconfirmed.append(r.get("model"))
+        if unknowns and not args.allow_unknown:
             # 关键约束在该料上根本没这个参数 → 不能当作"满足"（例如只标了 300mA 的料没写耐压）
             unknown_dropped.append(r)
         else:
@@ -668,10 +940,23 @@ def cmd_pick(args):
     picked = rank(ok, args.qty, args.sort)[: args.limit]
     all_unknowns = [u for r in recs for u in evaluate(r, constraints)[2]]
     render(cat, args.qty, picked, scanned, fails_stat, all_unknowns, args)
+    if func_mismatch:
+        print(f"功能不符已剔除 {len(func_mismatch)} 条："
+              + "；".join(func_mismatch[:3]) + ("…" if len(func_mismatch) > 3 else ""))
+    if func_conflict:
+        print(f"⚠ 功能有歧义 {len(func_conflict)} 条（名称正反词都命中，必须人工确认）："
+              + "；".join(func_conflict[:3]))
+    if func_unconfirmed and picked:
+        print(f"功能未确认 {len(func_unconfirmed)} 条：商品名里没有功能描述（只有型号/纯参数），"
+              "选型前需查手册或原厂页面 —— `python lcsc.py detail <C号> --pdf` 下载后交 read-pdf。")
     if unknown_dropped:
         print(f"另有 {len(unknown_dropped)} 条因缺少约束对应参数被排除（加 --allow-unknown 可放行）")
-    if args.taobao and picked:
-        market_compare(picked, args)
+    n_cmp = taobao_plan(args)
+    if picked and n_cmp:
+        market_compare(picked, args, n_cmp)
+    elif picked and args.qty > BATCH_QTY and not getattr(args, "no_taobao", False):
+        print(f"渠道: 批量（{args.qty} 只 > {BATCH_QTY}）默认不查淘宝 —— 走 1688 询盘/原厂代理；"
+              "要零售比价可加 --taobao N。")
     if args.json:
         out = {
             "generated": datetime.now().isoformat(timespec="seconds"),
@@ -685,7 +970,7 @@ def cmd_pick(args):
 
 
 def cmd_resolve(args):
-    cli = Lcsc(rate_limit=0.5)
+    cli = Lcsc(rate_limit=getattr(args, "rate", 0.5))
     kw = " ".join(args.keyword)
     r = cli.raw_search(kw)
     groups = sorted(r.get("catalogs") or [], key=lambda g: g.get("count") or 0, reverse=True)
@@ -740,8 +1025,16 @@ def main(argv=None):
     p.add_argument("--limit", type=int, default=8)
     p.add_argument("--json", help="把结果写到 JSON 文件")
     p.add_argument("--allow-unknown", action="store_true", help="允许缺少约束参数的料入选")
+    p.add_argument("--no-func", dest="no_func", action="store_true",
+                   help="关闭功能符合性校验（默认开启：滤掉名称含反向功能词的料，如把降压转换器当负载开关）")
     p.add_argument("--taobao", type=int, default=0, metavar="N",
                    help="对前 N 个结果去淘宝/1688 查零售单只价，做渠道比价")
+    p.add_argument("--no-taobao", dest="no_taobao", action="store_true",
+                   help="关闭少量场景（--qty<=10）的自动淘宝比价")
+    p.add_argument("--taobao-sample", dest="taobao_sample", type=int, default=3, metavar="N",
+                   help="少量场景自动比价的型号数（默认 3）")
+    p.add_argument("--taobao-json", dest="taobao_json", metavar="DIR",
+                   help="把淘宝/1688 原始结果按型号+时间戳落盘到 DIR")
     p.add_argument("--market", default="taobao", choices=["taobao", "1688"])
     p.add_argument("--debug", action="store_true")
     p.set_defaults(func=cmd_pick)
@@ -752,6 +1045,10 @@ def main(argv=None):
 
     p3 = sub.add_parser("cats", help="列出已知品类索引")
     p3.set_defaults(func=cmd_cats)
+
+    for _p in sub.choices.values():  # 所有子命令共享限速参数
+        _p.add_argument("--rate", type=float, default=0.8,
+                        help="请求间隔秒数（默认 0.8；被反爬时调大）")
 
     a = ap.parse_args(argv)
     if not getattr(a, "func", None):

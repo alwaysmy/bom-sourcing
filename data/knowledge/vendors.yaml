@@ -1,0 +1,3542 @@
+# =============================================================================
+# 厂商 / 品牌可信度表 —— 选料时的「品牌分层」知识库（机读版）
+#
+# 用途：同一型号在立创上常挂着十几个品牌的 C 号（AMS1117-3.3 有 18 个、SS34 有 17 个、
+#       S8050 有 24 个），价差可达 5~20 倍。只按价格排序会把贸易商/散货品牌当原厂推荐，
+#       量产时批次一致性、参数一致性、可追溯性都没有保障。本表给出「品牌 → 信任层级」，
+#       供 pick.py / bom.py 在「同规格候选中如何排序」这一步使用。
+#
+# 用法：
+#   1) tier_policy.hard_filters  先做硬过滤（tier 不允许的场合直接剔除）
+#   2) tier_policy.score_bonus   再给通过过滤的候选加分
+#   3) 品牌只是「同等规格下」的排序因子，不能替代指标核对（指标核对见 data/spec-rules.yaml）
+#
+# 人读版：references/vendors.md（含维护流程 / 复核周期 / 取证方法）
+# 采集记录：Bom_Flow/research/vendors.md（本次实测的 25 个关键词、645 条记录）
+#
+# 维护约定：
+#   1. 品牌名一律原样使用立创 productGradePlateName（含中文括号），不得自造或改写
+#   2. tier 判定必须有可观证据（官网 / 是否自有产线 / 是否横跨不相关品类 / 价格档位），
+#      证据不足的写 evidence: experience + confidence: low
+#   3. 价格与库存是瞬时快照，必须标采集时间
+#   4. 本表只做「可信度分层」，不做「好/坏」评价：贸易商在打样阶段是合理选择
+# =============================================================================
+
+schema: bom-sourcing/knowledge/vendors
+version: 1
+generated: '2026-11-05'
+locale: zh-CN
+
+purpose: >-
+  把「这个品牌能不能用、用在什么场合」从拍脑袋变成可匹配的层级表。
+  同一颗料在原厂与贸易商之间的价差是真实的，但量产风险也是真实的；
+  本表提供的是「按场合选择信任层级」的判据，而不是一张黑名单。
+
+evidence_levels:
+  official: 品牌官网 / 官方产品目录 / 授权代理名录，可作硬约束
+  measured: 本仓 probe/vendors/ 脚本实测（品牌名、价格、库存、型号），可作硬约束
+  secondary: 第三方转述（行业媒体、论坛、分销商页面），只作提示
+  experience: 行业通行经验，无单一出处，只作启发式，必须可被人工推翻
+
+# -----------------------------------------------------------------------------
+# 一、分层定义
+# -----------------------------------------------------------------------------
+tiers:
+  original_idm:
+    display: 原厂 IDM
+    definition: 自有晶圆/封测产线的原厂，或自有品牌的全流程制造商（含阻容感、连接器、继电器等无源件龙头）
+    examples: [TI(德州仪器), ST(意法半导体), muRata(村田), YAGEO(国巨), FH(风华), 松乐]
+    price_index: 1.0            # 相对基准
+    risk: 假货/翻新为主要风险（非品牌本身问题），须走正规渠道
+    default_for: 量产、认证、可靠性敏感场合
+  original_fabless:
+    display: 原厂 Fabless
+    definition: 无自有晶圆厂但自有设计、自有型号与品牌（国产 MCU/电源/运放为主）
+    examples: [WCH(南京沁恒), GigaDevice(兆易创新), 3PEAK(思瑞浦), 西安航天民芯, AOS]
+    price_index: 0.9
+    risk: 兼容型号需重测固件/时序；原厂型号本身无问题
+    default_for: 国产替代、成本敏感但要求原厂料号可追溯
+  domestic_second:
+    display: 国产二线 / 替代品牌
+    definition: 有自有型号体系与官网的二线/替代品牌，多为 pin-to-pin 兼容件
+    examples: [UMW(友台半导体), HGSEMI(华冠), MDD(辰达半导体), HRE(芯声), HKT(合科泰)]
+    price_index: 0.3            # 相对原厂
+    risk: 关键参数（温漂、PSRR、CTR 分档、Rds(on) 测试条件）标注不全或偏乐观，须抽样实测
+    default_for: 打样、小批量、非关键参数场合；量产须做批次一致性验证
+  trader:
+    display: 贸易商 / 贴牌散货
+    definition: 无自有产线、无自有型号体系的贴牌/散货品牌；机械特征是同一品牌横跨大量不相关品类
+    examples: [JSMSEMI(杰盛微), GOODWORK(固得沃克), R+O(宏嘉诚), FOSAN(富捷/富信), 国芯佳品]
+    price_index: 0.15
+    risk: 批次不一致、参数虚标、丝印打磨、无原厂授权；出问题无法追溯
+    default_for: 仅打样/验证阶段的非关键件；量产默认剔除
+  unknown:
+    display: 未判定 / 无牌
+    definition: 无官网、无中文名、或本次采集资料不足以判定的品牌
+    examples_note: 由脚本自动回填（本次采集里未能判定归属的品牌）
+    price_index: null
+    risk: 最高。可能对应同一批散货换多个丝印
+    default_for: 不建议使用；若必须用，先做全参数抽测
+
+# -----------------------------------------------------------------------------
+# 二、可执行策略（pick.py / bom.py 直接照做）
+# -----------------------------------------------------------------------------
+tier_policy:
+  description: >-
+    品牌分层是「同等规格、同等封装、同等库存」之后的排序因子，不参与硬过滤以外的任何
+    指标判断。硬过滤只按使用场合（stage）决定允许的 tier 集合。
+
+  stage_allowed_tiers:
+    prototype:            # 打样：功能优先，成本敏感，允许贸易商
+      allow: [original_idm, original_fabless, domestic_second, trader]
+      note: trader 允许但必须提示「量产需换料」
+    small_batch:          # 小批（<100 片）：开始看一致性
+      allow: [original_idm, original_fabless, domestic_second]
+    mass_production:      # 量产：可追溯性优先
+      allow: [original_idm, original_fabless]
+      note: 只有 datasheet 明确给出 pin-to-pin 兼容且原厂料号时，才允许 domestic_second
+    certified:            # 认证/医疗/车载
+      allow: [original_idm, original_fabless]
+      require_official_datasheet: true
+      forbid_tier_override: true   # 即使价格再低也不降级
+
+  score_bonus:
+    original_idm: 1.00
+    original_fabless: 0.90
+    domestic_second: 0.45
+    trader: 0.10
+    unknown: 0.00
+    formula: 'brand_score = score_bonus[tier] * 0.15  # 权重 15%，与 spec-rules.yaml 的 brand_score 对齐'
+
+  hard_rules:
+    - id: no_unknown_in_mass
+      rule: 'stage in {mass_production, certified} 且 tier == unknown → 直接剔除'
+      rationale: 无牌散货无法做批次追溯，量产返修成本远高于料价差
+    - id: trader_needs_flag
+      rule: 'stage == prototype 且 tier == trader → 允许，但输出必须带 warning: "贸易商品牌，量产需换原厂/二线料号"'
+      rationale: 打样阶段用贸易商是合理的，但必须让人知道
+    - id: name_collision_check
+      rule: '品牌中文名或英文缩写与其它品牌同名的，采购单必须写完整 productGradePlateName'
+      rationale: FOSAN(富捷/富信) vs FOJAN(富捷)、RS(容硕) vs RS Components、HUAWEI(华威集团) vs 华为、JBL(金比莱) vs JBL 音响
+    - id: tier_never_overrides_spec
+      rule: 'tier 只用于同规格候选的排序；不得因为 tier 高而放宽 spec-rules.yaml 的硬约束'
+      rationale: 原厂的错料依然是错料
+
+  dedup_rule:
+    rule: '同一 tier 内优先按「库存 > 0 且销量高」选；同 MPN 多个 C 号时按 C 号去重后取有货者'
+    rationale: W25Q64JVSSIQ 的 C179171 有货 1383、C83140 库存 0，同型号不同 C 号库存完全独立
+
+# -----------------------------------------------------------------------------
+# 三、品牌清单（name 原样取自立创 productGradePlateName）
+#     observed 字段 = 本次 25 个关键词 / 645 条记录里的实测频次
+# -----------------------------------------------------------------------------
+vendors:
+  ti:
+    name: TI(德州仪器)
+    aka:
+    - 德州仪器
+    - Texas Instruments
+    - TI
+    tier: original_idm
+    type: idm
+    country: US
+    evidence: experience
+    confidence: high
+    risk_note: 原厂正品。同型号常有多个封装/温度等级（如 LM358DR 与 LM358BIDR），替代时注意后缀；交期紧张时价格波动大。
+    observed:
+      records: 32
+      keywords:
+      - LM2596
+      - LM358
+      - NE555
+      - TL431
+      min_price_cny: 0.4071
+    typical_parts:
+    - C10002 LM2596SX-5.0/NOPB (TO-263-5)
+    - C29781 LM2596SX-ADJ/NOPB (TO-263-5)
+    - C17127 LM2596SX-12/NOPB (TO-263-5)
+    - C1355333 LM2596S-ADJ/NOPB (DDPAK(TO-263-5))
+    sources:
+    - https://so.szlcsc.com/global.html?k=LM2596
+    tier_basis: 行业公认的 IDM 原厂（自有晶圆/封测产线）；本轮未逐一核官网
+  st:
+    name: ST(意法半导体)
+    aka:
+    - 意法半导体
+    - STMicroelectronics
+    - ST
+    tier: original_idm
+    type: idm
+    country: CH
+    evidence: experience
+    confidence: high
+    risk_note: 原厂正品。MCU 与电源管理为主；ST 的 tpd/Vos 等参数常优于国产二线，不能只看封装替代。
+    observed:
+      records: 6
+      keywords:
+      - LM358
+      - STM32F103C8T6
+      - TL431
+      min_price_cny: 0.5834
+    typical_parts:
+    - C9418 LM358DT (SO-8)
+    - C54867 LM358ST (MSOP-8)
+    - C92457 LM358ADT (SO-8)
+    - C8734 STM32F103C8T6 (LQFP-48(7x7))
+    sources:
+    - https://so.szlcsc.com/global.html?k=LM358
+    tier_basis: 行业公认的 IDM 原厂（自有晶圆/封测产线）；本轮未逐一核官网
+  onsemi:
+    name: onsemi(安森美)
+    aka:
+    - 安森美
+    - ON Semiconductor
+    - 'ON'
+    tier: original_idm
+    type: idm
+    country: US
+    evidence: experience
+    confidence: high
+    risk_note: 原厂正品。分立器件常见，价格明显高于国产替代（SS34 达 20 倍以上），非关键场合可按规格降级。
+    observed:
+      records: 3
+      keywords:
+      - LM358
+      - SS34
+      - SS8050
+      min_price_cny: 0.3308
+    typical_parts:
+    - C7950 LM358DR2G (SOIC-8)
+    - C154551 SS34 (SMC(DO-214AB))
+    - C327517 SS8050CTA (TO-92-3L)
+    sources:
+    - https://so.szlcsc.com/global.html?k=LM358
+    tier_basis: 行业公认的 IDM 原厂（自有晶圆/封测产线）；本轮未逐一核官网
+  vishay:
+    name: VISHAY(威世)
+    aka:
+    - 威世
+    - Vishay
+    tier: original_idm
+    type: idm
+    country: US
+    evidence: experience
+    confidence: high
+    risk_note: 原厂正品。电阻/钽电容/二极管，参数标注最严谨（同参数下常标更差的条件值，不代表性能差）。
+    observed:
+      records: 14
+      keywords:
+      - 10k 0603 1%
+      - 10uF 16V 钽电容
+      - 1N4148W
+      min_price_cny: 0.0234
+    typical_parts:
+    - C844918 CRCW060310K0FKEA (0603)
+    - C844728 CRCW060310K0FKEAHP (0603)
+    - C843841 CRCW060310K0FKEC (0603)
+    - C161803 MCT06030C1002FP500 (0603)
+    sources:
+    - https://so.szlcsc.com/global.html?k=10k%200603%201%
+    tier_basis: 行业公认的 IDM 原厂（自有晶圆/封测产线）；本轮未逐一核官网
+  murata:
+    name: muRata(村田)
+    aka:
+    - 村田
+    - Murata
+    tier: original_idm
+    type: idm
+    country: JP
+    evidence: experience
+    confidence: high
+    risk_note: 原厂正品。MLCC/磁珠/电感；同容值价格约为国产 3~5 倍，仅在高频/高可靠场合必要。
+    observed:
+      records: 18
+      keywords:
+      - 0603 磁珠
+      - 100nF 0603 50V
+      - 10uH 电感
+      min_price_cny: 0.06
+    typical_parts:
+    - C14709 BLM18PG121SN1D (0603)
+    - C19330 BLM18AG601SN1D (0603)
+    - C85833 BLM18KG601SN1D (0603)
+    - C113030 BLM18SG121TN1D (0603)
+    sources:
+    - https://so.szlcsc.com/global.html?k=0603%20磁珠
+    tier_basis: 行业公认的 IDM 原厂（自有晶圆/封测产线）；本轮未逐一核官网
+  tdk:
+    name: TDK
+    aka:
+    - TDK
+    tier: original_idm
+    type: idm
+    country: JP
+    evidence: experience
+    confidence: high
+    risk_note: 原厂正品。磁珠/电感/MLCC，型号含尺寸码，替代时须核对 0603/0805 与阻抗频点。
+    observed:
+      records: 9
+      keywords:
+      - 0603 磁珠
+      - 100nF 0603 50V
+      min_price_cny: 0.0676
+    typical_parts:
+    - C76815 MPZ1608S221ATA00 (0603)
+    - C107332 MPZ1608S101ATAH0 (0603)
+    - C76814 MPZ1608S102ATA00 (0603)
+    - C275486 MPZ1608S300ATAH0 (0603)
+    sources:
+    - https://so.szlcsc.com/global.html?k=0603%20磁珠
+    tier_basis: 行业公认的 IDM 原厂（自有晶圆/封测产线）；本轮未逐一核官网
+  samsung:
+    name: SAMSUNG(三星)
+    aka:
+    - 三星
+    - Samsung
+    - 三星电机
+    tier: original_idm
+    type: idm
+    country: KR
+    evidence: experience
+    confidence: high
+    risk_note: 原厂正品。MLCC 主力，X5R/X7R 介质标注清晰；DL 偏压衰减仍存在，耐压按 2 倍留。
+    observed:
+      records: 5
+      keywords:
+      - 100nF 0603 50V
+      min_price_cny: 0.046
+    typical_parts:
+    - C1591 CL10B104KB8NNNC (0603)
+    - C307348 CL10B104KB8WPNC (0603)
+    - C24452 CL10B104JB8NNNC (0603)
+    - C346191 CL10B104KB8NFNC (0603)
+    sources:
+    - https://so.szlcsc.com/global.html?k=100nF%200603%2050V
+    tier_basis: 行业公认的 IDM 原厂（自有晶圆/封测产线）；本轮未逐一核官网
+  panasonic:
+    name: PANASONIC(松下)
+    aka:
+    - 松下
+    - Panasonic
+    - Panasonic 松下
+    tier: original_idm
+    type: idm
+    country: JP
+    evidence: experience
+    confidence: high
+    risk_note: 原厂正品。电解/电阻/继电器，价格高；长寿命场合（105℃ 系列）值得选。
+    observed:
+      records: 4
+      keywords:
+      - 100uF 25V 铝电解
+      - 10k 0603 1%
+      min_price_cny: 0.0444
+    typical_parts:
+    - C178540 EEEFK1E101SP (SMD,D6.3xL5.8mm)
+    - C191124 ERJ3EKF1002V (0603)
+    - C491211 ERJUP3F1002V (0603)
+    - C278669 ERJP03F1002V (0603)
+    sources:
+    - https://so.szlcsc.com/global.html?k=100uF%2025V%20铝电解
+    tier_basis: 行业公认的 IDM 原厂（自有晶圆/封测产线）；本轮未逐一核官网
+  kyocera-avx:
+    name: Kyocera AVX
+    aka:
+    - AVX
+    - 京瓷
+    - Kyocera
+    tier: original_idm
+    type: idm
+    country: US
+    evidence: experience
+    confidence: high
+    risk_note: 原厂正品。钽电容主力品牌；钽电容失效即短路，禁反接、降额 2 倍。
+    observed:
+      records: 8
+      keywords:
+      - 10uF 16V 钽电容
+      min_price_cny: 1.1849
+    typical_parts:
+    - C7171 TAJA106K016RNJ (CASE-A-3216-18(mm))
+    - C7193 TAJB106K016RNJ (CASE-B-3528-21(mm))
+    - C7209 TAJC106K016RNJ (CASE-C-6032-28(mm))
+    - C124892 TPSB106K016R0500 (CASE-B-3528-21(mm))
+    sources:
+    - https://so.szlcsc.com/global.html?k=10uF%2016V%20钽电容
+    tier_basis: 行业公认的 IDM 原厂（自有晶圆/封测产线）；本轮未逐一核官网
+  kemet:
+    name: KEMET(基美)
+    aka:
+    - 基美
+    - KEMET
+    tier: original_idm
+    type: idm
+    country: US
+    evidence: experience
+    confidence: high
+    risk_note: 原厂正品。钽电容/MLCC；汽车级（AUTO 后缀）价格翻倍，非必要不用。
+    observed:
+      records: 7
+      keywords:
+      - 100nF 0603 50V
+      - 10uF 16V 钽电容
+      min_price_cny: 0.0808
+    typical_parts:
+    - C129621 C0603C104K5RACAUTO (0603)
+    - C110055 T491A106K016AT (CASE-A-3216-18(mm))
+    - C110050 T491B106K016AT (CASE-B-3528-21(mm))
+    - C118990 T491A106M016AT (CASE-A-3216-18(mm))
+    sources:
+    - https://so.szlcsc.com/global.html?k=100nF%200603%2050V
+    tier_basis: 行业公认的 IDM 原厂（自有晶圆/封测产线）；本轮未逐一核官网
+  yageo:
+    name: YAGEO(国巨)
+    aka:
+    - 国巨
+    - Yageo
+    tier: original_idm
+    type: idm
+    country: TW
+    evidence: experience
+    confidence: high
+    risk_note: 原厂正品。电阻/MLCC 通用件，性价比好，是电阻默认首选之一。
+    observed:
+      records: 9
+      keywords:
+      - 100nF 0603 50V
+      - 10k 0603 1%
+      min_price_cny: 0.0159
+    typical_parts:
+    - C106221 CC0603ZRY5V9BB104 (0603)
+    - C91183 CC0603JRX7R9BB104 (0603)
+    - C149620 AC0603KRX7R9BB104 (0603)
+    - C14663 CC0603KRX7R9BB104 (0603)
+    sources:
+    - https://so.szlcsc.com/global.html?k=100nF%200603%2050V
+    tier_basis: 行业公认的 IDM 原厂（自有晶圆/封测产线）；本轮未逐一核官网
+  rohm:
+    name: ROHM(罗姆)
+    aka:
+    - 罗姆
+    - Rohm
+    tier: original_idm
+    type: idm
+    country: JP
+    evidence: experience
+    confidence: high
+    risk_note: 原厂正品。价格偏高；常规电阻不必用，关键模拟场合可用。
+    observed:
+      records: 1
+      keywords:
+      - 10k 0603 1%
+      min_price_cny: 0.1126
+    typical_parts:
+    - C510087 ESR03EZPF1002 (0603)
+    sources:
+    - https://so.szlcsc.com/global.html?k=10k%200603%201%
+    tier_basis: 行业公认的 IDM 原厂（自有晶圆/封测产线）；本轮未逐一核官网
+  nexperia:
+    name: Nexperia(安世)
+    aka:
+    - 安世
+    - Nexperia
+    - 恩智浦标准品
+    tier: original_idm
+    type: idm
+    country: NL
+    evidence: experience
+    confidence: high
+    risk_note: 原厂正品（原 NXP 标准器件部）。TL431/二极管/逻辑，参数中规中矩，替代国产时注意 Vref 精度分档。
+    observed:
+      records: 4
+      keywords:
+      - TL431
+      min_price_cny: 0.5212
+    typical_parts:
+    - C553840 TL431AMFDT,215 (SOT-23)
+    - C97757 TL431BMFDT,215 (SOT-23)
+    - C78609 TL431BIDBZR,215 (SOT-23)
+    - C282573 TL431FDT,215 (SOT-23)
+    sources:
+    - https://so.szlcsc.com/global.html?k=TL431
+    tier_basis: 行业公认的 IDM 原厂（自有晶圆/封测产线）；本轮未逐一核官网
+  sharp:
+    name: SHARP(夏普)
+    aka:
+    - 夏普
+    - Sharp
+    tier: original_idm
+    type: idm
+    country: JP
+    evidence: experience
+    confidence: high
+    risk_note: 原厂正品。光耦 PC817 原厂，CTR 分档（A/B/C/D）必须核对，不同档不可互换。
+    observed:
+      records: 10
+      keywords:
+      - PC817
+      min_price_cny: 0.3668
+    typical_parts:
+    - C66405 PC817X2CSP9F (SMD-4P)
+    - C41807 PC817X3CSP9F (SMD-4P)
+    - C2840443 PC817X2NIPW (SOP-4-2.54mm)
+    - C5350 PC817X2NSZW (DIP-4)
+    sources:
+    - https://so.szlcsc.com/global.html?k=PC817
+    tier_basis: 行业公认的 IDM 原厂（自有晶圆/封测产线）；本轮未逐一核官网
+  winbond:
+    name: Winbond(华邦)
+    aka:
+    - 华邦
+    - Winbond
+    tier: original_idm
+    type: idm
+    country: TW
+    evidence: experience
+    confidence: high
+    risk_note: 原厂正品。NOR/NAND Flash；同型号多个 C 号库存差异极大，必须按 C 号选有货者。
+    observed:
+      records: 28
+      keywords:
+      - W25Q64
+      min_price_cny: 6.39
+    typical_parts:
+    - C179171 W25Q64JVSSIQ (SOIC-8-208mil)
+    - C5362615 W25Q64JVSSIM (SOIC-8-208mil)
+    - C6604692 W25Q64JWUUIQ (USON-8(3x4))
+    - C571262 W25Q64JVZEIQ (WSON-8-EP(6x8))
+    sources:
+    - https://so.szlcsc.com/global.html?k=W25Q64
+    tier_basis: 行业公认的 IDM 原厂（自有晶圆/封测产线）；本轮未逐一核官网
+  epson:
+    name: EPSON(爱普生)
+    aka:
+    - 爱普生
+    - Epson
+    tier: original_idm
+    type: idm
+    country: JP
+    evidence: experience
+    confidence: high
+    risk_note: 原厂正品。晶振价格约为国产 5 倍，民用产品非必要不用。
+    observed:
+      records: 1
+      keywords:
+      - 16MHz 贴片晶振
+      min_price_cny: 2.45
+    typical_parts:
+    - C255906 X1E0003410273 (SMD3225-4P)
+    sources:
+    - https://so.szlcsc.com/global.html?k=16MHz%20贴片晶振
+    tier_basis: 行业公认的 IDM 原厂（自有晶圆/封测产线）；本轮未逐一核官网
+  taiyo-yuden:
+    name: TAIYO YUDEN(太诱)
+    aka:
+    - 太诱
+    - Taiyo Yuden
+    tier: original_idm
+    type: idm
+    country: JP
+    evidence: experience
+    confidence: high
+    risk_note: 原厂正品。MLCC/电感，高频特性好；价格高。
+    observed:
+      records: 1
+      keywords:
+      - 100nF 0603 50V
+      min_price_cny: 0.1057
+    typical_parts:
+    - C386155 UMK107B7104KAHT (0603)
+    sources:
+    - https://so.szlcsc.com/global.html?k=100nF%200603%2050V
+    tier_basis: 行业公认的 IDM 原厂（自有晶圆/封测产线）；本轮未逐一核官网
+  koa:
+    name: KOA
+    aka:
+    - KOA
+    - 兴亚
+    tier: original_idm
+    type: idm
+    country: JP
+    evidence: experience
+    confidence: high
+    risk_note: 原厂正品。电阻/保险丝电阻；精度高，价格高。
+    observed:
+      records: 2
+      keywords:
+      - 10k 0603 1%
+      min_price_cny: 0.0356
+    typical_parts:
+    - C130232 RK73H1JTTD1002F (0603)
+    - C362180 RK73G1JTTD1002F (0603)
+    sources:
+    - https://so.szlcsc.com/global.html?k=10k%200603%201%
+    tier_basis: 行业公认的 IDM 原厂（自有晶圆/封测产线）；本轮未逐一核官网
+  walsin:
+    name: Walsin(华新科)
+    aka:
+    - 华新科
+    - Walsin
+    tier: original_idm
+    type: idm
+    country: TW
+    evidence: experience
+    confidence: high
+    risk_note: 原厂正品。MLCC/电阻通用件，性价比好。
+    observed:
+      records: 2
+      keywords:
+      - 100nF 0603 50V
+      - 10k 0603 1%
+      min_price_cny: 0.0251
+    typical_parts:
+    - C314282 0603B104K500CT (0603)
+    - C108449 WR06X1002FTL (0603)
+    sources:
+    - https://so.szlcsc.com/global.html?k=100nF%200603%2050V
+    tier_basis: 行业公认的 IDM 原厂（自有晶圆/封测产线）；本轮未逐一核官网
+  mcc:
+    name: MCC(美微科)
+    aka:
+    - 美微科
+    - MCC
+    - Micro Commercial Components
+    tier: original_idm
+    type: idm
+    country: TW
+    evidence: experience
+    confidence: high
+    risk_note: 原厂正品。二极管为主，型号后缀（-TP 卷带）不影响电气参数。
+    observed:
+      records: 2
+      keywords:
+      - 1N4148W
+      min_price_cny: 0.0647
+    typical_parts:
+    - C77978 1N4148W-TP (SOD-123)
+    - C78740 1N4148WX-TP (SOD-323)
+    sources:
+    - https://so.szlcsc.com/global.html?k=1N4148W
+    tier_basis: 行业公认的 IDM 原厂（自有晶圆/封测产线）；本轮未逐一核官网
+  lrc:
+    name: LRC(乐山无线电)
+    aka:
+    - 乐山无线电
+    - LRC
+    tier: original_idm
+    type: idm
+    country: CN
+    evidence: experience
+    confidence: high
+    risk_note: 原厂正品（国产老牌）。小信号二极管/三极管，一致性好。
+    observed:
+      records: 1
+      keywords:
+      - 1N4148W
+      min_price_cny: 0.0776
+    typical_parts:
+    - C78089 L1N4148WT1G (SOD-123)
+    sources:
+    - https://so.szlcsc.com/global.html?k=1N4148W
+    tier_basis: 行业公认的 IDM 原厂（自有晶圆/封测产线）；本轮未逐一核官网
+  comchip:
+    name: Comchip(典琦)
+    aka:
+    - 典琦
+    - Comchip
+    tier: original_idm
+    type: idm
+    country: TW
+    evidence: experience
+    confidence: high
+    risk_note: 原厂正品。二极管，价格中等。
+    observed:
+      records: 1
+      keywords:
+      - SS8050
+      min_price_cny: 0.3719
+    typical_parts:
+    - C3199946 SS8050-G (SOT-23)
+    sources:
+    - https://so.szlcsc.com/global.html?k=SS8050
+    tier_basis: 行业公认的 IDM 原厂（自有晶圆/封测产线）；本轮未逐一核官网
+  bourns:
+    name: BOURNS
+    aka:
+    - 伯恩斯
+    - Bourns
+    tier: original_idm
+    type: idm
+    country: US
+    evidence: experience
+    confidence: high
+    risk_note: 原厂正品。电阻/保险丝/电位器；价格高，一般只用于精密或安规件。
+    observed:
+      records: 1
+      keywords:
+      - 10k 0603 1%
+      min_price_cny: 0.0274
+    typical_parts:
+    - C840630 CR0603-FX-1002ELF (0603)
+    sources:
+    - https://so.szlcsc.com/global.html?k=10k%200603%201%
+    tier_basis: 行业公认的 IDM 原厂（自有晶圆/封测产线）；本轮未逐一核官网
+  diodes:
+    name: DIODES(美台)
+    aka:
+    - 美台
+    - Diodes Incorporated
+    - 达尔
+    tier: original_idm
+    type: idm
+    country: US
+    evidence: experience
+    confidence: high
+    risk_note: 原厂正品。二极管/电源；价格高于国产，注意与国产同名型号参数差异。
+    observed:
+      records: 2
+      keywords:
+      - 1N4148W
+      - NE555
+      min_price_cny: 0.1641
+    typical_parts:
+    - C83528 1N4148W-7-F (SOD-123)
+    - C181735 NE555S-13 (SOIC-8)
+    sources:
+    - https://so.szlcsc.com/global.html?k=1N4148W
+    tier_basis: 行业公认的 IDM 原厂（自有晶圆/封测产线）；本轮未逐一核官网
+  advanced-monolithic-systems:
+    name: Advanced Monolithic Systems
+    aka:
+    - AMS
+    - AMS 原厂
+    tier: original_idm
+    type: idm
+    country: US
+    evidence: experience
+    confidence: high
+    risk_note: 原厂正品。AMS1117 的原始厂牌；价格约 ¥1.26，比国产替代贵 5 倍以上，仅认证/量产需要时选。
+    observed:
+      records: 1
+      keywords:
+      - AMS1117-3.3
+      min_price_cny: 1.2589
+    typical_parts:
+    - C6186 AMS1117-3.3 (SOT-223)
+    sources:
+    - https://so.szlcsc.com/global.html?k=AMS1117-3.3
+    tier_basis: 行业公认的 IDM 原厂（自有晶圆/封测产线）；本轮未逐一核官网
+  sunlord:
+    name: Sunlord(顺络)
+    aka:
+    - 顺络
+    - Sunlord
+    - 深圳顺络
+    tier: original_idm
+    type: idm
+    country: CN
+    evidence: experience
+    confidence: high
+    risk_note: 原厂正品（国产电感龙头）。电感/磁珠默认首选之一，型号规则清晰。
+    observed:
+      records: 10
+      keywords:
+      - 0603 磁珠
+      - 10uH 电感
+      min_price_cny: 0.0698
+    typical_parts:
+    - C1002 GZ1608D601TF (0603)
+    - C279682 UPZ1608E121-3R0TF (0603)
+    - C96997 UPZ1608E221-2R2TF (0603)
+    - C96995 UPZ1608E101-3R0TF (0603)
+    sources:
+    - https://so.szlcsc.com/global.html?k=0603%20磁珠
+    tier_basis: 行业公认的 IDM 原厂（自有晶圆/封测产线）；本轮未逐一核官网
+  lelon:
+    name: Lelon(立隆)
+    aka:
+    - 立隆
+    - Lelon
+    tier: original_idm
+    type: idm
+    country: TW
+    evidence: experience
+    confidence: high
+    risk_note: 原厂正品。铝电解，105℃ 长寿命系列齐全。
+    observed:
+      records: 4
+      keywords:
+      - 100uF 25V 铝电解
+      min_price_cny: 0.4477
+    typical_parts:
+    - C176675 VES101M1ETR-0607 (SMD,D6.3xL7.7mm)
+    - C311617 VZH101M1ETR-0607 (SMD,D6.3xL7.7mm)
+    - C249967 VZS101M1ETR-0606 (SMD,D6.3xL5.8mm)
+    - C5266063 VZT101M1ETR-0606 (SMD,D6.3xL5.8mm)
+    sources:
+    - https://so.szlcsc.com/global.html?k=100uF%2025V%20铝电解
+    tier_basis: 行业公认的 IDM 原厂（自有晶圆/封测产线）；本轮未逐一核官网
+  aishi:
+    name: AISHI(艾华集团)
+    aka:
+    - 艾华
+    - 艾华集团
+    - Aishi
+    tier: original_idm
+    type: idm
+    country: CN
+    evidence: experience
+    confidence: high
+    risk_note: 原厂正品（国产铝电解龙头）。性价比好，长寿命系列可用。
+    observed:
+      records: 2
+      keywords:
+      - 100uF 25V 铝电解
+      min_price_cny: 0.3659
+    typical_parts:
+    - C724367 EMF1EM101E83D00R (SMD,D6.3xL8mm)
+    - C2686198 EMK1EM101E83D00R (SMD,D6.3xL8mm)
+    sources:
+    - https://so.szlcsc.com/global.html?k=100uF%2025V%20铝电解
+    tier_basis: 行业公认的 IDM 原厂（自有晶圆/封测产线）；本轮未逐一核官网
+  湘怡中元-湘江:
+    name: 湘怡中元/湘江
+    aka:
+    - 湘怡中元
+    - 湘江
+    - 湘江电容
+    tier: original_idm
+    type: idm
+    country: CN
+    evidence: experience
+    confidence: high
+    risk_note: 原厂正品（国产钽电容）。价格约为 AVX 的 1/1.7，民用产品可用。
+    observed:
+      records: 4
+      keywords:
+      - 10uF 16V 钽电容
+      min_price_cny: 0.6891
+    typical_parts:
+    - C119051 CA45-A016K106T (CASE-A-3216-16(mm))
+    - C123255 CA45-B016K106T (CASE-B-3528-19(mm))
+    - C126944 CA45-B016M106T (CASE-B-3528-19(mm))
+    - C126470 CA45-A016M106T (CASE-A-3216-16(mm))
+    sources:
+    - https://so.szlcsc.com/global.html?k=10uF%2016V%20钽电容
+    tier_basis: 行业公认的 IDM 原厂（自有晶圆/封测产线）；本轮未逐一核官网
+  xy:
+    name: XY(振华新云)
+    aka:
+    - 振华新云
+    - 新云
+    - 中国振华
+    tier: original_idm
+    type: idm
+    country: CN
+    evidence: experience
+    confidence: high
+    risk_note: 原厂正品（军工系钽电容）。民用产品性价比一般，但可靠性好。
+    observed:
+      records: 3
+      keywords:
+      - 10uF 16V 钽电容
+      min_price_cny: 0.6843
+    typical_parts:
+    - C128254 CA45-A-16V-10uF-K (CASE-A-3216-16(mm))
+    - C128257 CA45-B-16V-10uF-K (CASE-B-3528-19(mm))
+    - C129279 CA45A-A-16V-10uF-K (CASE-A-3216-16(mm))
+    sources:
+    - https://so.szlcsc.com/global.html?k=10uF%2016V%20钽电容
+    tier_basis: 行业公认的 IDM 原厂（自有晶圆/封测产线）；本轮未逐一核官网
+  torch:
+    name: TORCH(火炬)
+    aka:
+    - 火炬电子
+    - Torch
+    tier: original_idm
+    type: idm
+    country: CN
+    evidence: experience
+    confidence: high
+    risk_note: 原厂正品（军工系 MLCC）。价格高，民品非必要不用。
+    observed:
+      records: 1
+      keywords:
+      - 10uF 16V 钽电容
+      min_price_cny: 1.4289
+    typical_parts:
+    - C185774 CA45-A-16V-10uF-K (CASE-A-3216-16(mm))
+    sources:
+    - https://so.szlcsc.com/global.html?k=10uF%2016V%20钽电容
+    tier_basis: 行业公认的 IDM 原厂（自有晶圆/封测产线）；本轮未逐一核官网
+  cctc:
+    name: CCTC(三环)
+    aka:
+    - 三环
+    - 三环集团
+    - CCTC
+    tier: original_idm
+    type: idm
+    country: CN
+    evidence: experience
+    confidence: high
+    risk_note: 原厂正品（国产 MLCC）。性价比好，可作三星/村田的价格替代。
+    observed:
+      records: 3
+      keywords:
+      - 100nF 0603 50V
+      min_price_cny: 0.0253
+    typical_parts:
+    - C282519 TCC0603X7R104K500CT (0603)
+    - C880612 TCC0603X7R104M500CTS (0603)
+    - C48543610 TCC0603X7R104K500CTM (0603)
+    sources:
+    - https://so.szlcsc.com/global.html?k=100nF%200603%2050V
+    tier_basis: 行业公认的 IDM 原厂（自有晶圆/封测产线）；本轮未逐一核官网
+  fh:
+    name: FH(风华)
+    aka:
+    - 风华
+    - 风华高科
+    - Fenghua
+    tier: original_idm
+    type: idm
+    country: CN
+    evidence: experience
+    confidence: high
+    risk_note: 原厂正品（国产 MLCC/电感龙头）。阻容默认首选之一，交期稳定。
+    observed:
+      records: 7
+      keywords:
+      - 0603 磁珠
+      - 100nF 0603 50V
+      - 10k 0603 1%
+      - 10uH 电感
+      min_price_cny: 0.0138
+    typical_parts:
+    - C62708 CBM160808U121T (0603)
+    - C73326 CBG160808U601T (0603)
+    - C286510 0603B104M500NT (0603)
+    - C30926 0603B104K500NT (0603)
+    sources:
+    - https://so.szlcsc.com/global.html?k=0603%20磁珠
+    tier_basis: 行业公认的 IDM 原厂（自有晶圆/封测产线）；本轮未逐一核官网
+  uni-royal:
+    name: UNI-ROYAL(厚声)
+    aka:
+    - 厚声
+    - Uni-Royal
+    - 厚声电子
+    tier: original_idm
+    type: idm
+    country: TW
+    evidence: experience
+    confidence: high
+    risk_note: 原厂正品。贴片电阻默认首选，1% 精度稳定，价格低。
+    observed:
+      records: 3
+      keywords:
+      - 10k 0603 1%
+      min_price_cny: 0.0142
+    typical_parts:
+    - C25804 0603WAF1002T5E (0603)
+    - C2989021 TC0325F1002T5F (0603)
+    - C965184 NQ03WAF1002T5E (0603)
+    sources:
+    - https://so.szlcsc.com/global.html?k=10k%200603%201%
+    tier_basis: 行业公认的 IDM 原厂（自有晶圆/封测产线）；本轮未逐一核官网
+  viking:
+    name: Viking(光颉)
+    aka:
+    - 光颉
+    - Viking
+    tier: original_idm
+    type: idm
+    country: TW
+    evidence: experience
+    confidence: high
+    risk_note: 原厂正品。电阻/合金电阻，性价比好。
+    observed:
+      records: 2
+      keywords:
+      - 10k 0603 1%
+      min_price_cny: 0.0134
+    typical_parts:
+    - C216802 CR-03FL7---10K (0603)
+    - C217687 ARG03FTC1002 (0603)
+    sources:
+    - https://so.szlcsc.com/global.html?k=10k%200603%201%
+    tier_basis: 行业公认的 IDM 原厂（自有晶圆/封测产线）；本轮未逐一核官网
+  yxc:
+    name: YXC(扬兴晶振)
+    aka:
+    - 扬兴
+    - 扬兴晶振
+    - YXC
+    tier: original_idm
+    type: idm
+    country: CN
+    evidence: experience
+    confidence: high
+    risk_note: 原厂正品（国产晶振）。16MHz 3225 封装默认首选，价格约 ¥0.41~0.57。
+    observed:
+      records: 22
+      keywords:
+      - 16MHz 贴片晶振
+      min_price_cny: 0.41
+    typical_parts:
+    - C13738 X322516MLB4SI (SMD3225-4P)
+    - C12668 X322516MOB4SI (SMD3225-4P)
+    - C2965579 XL7EL89COI-111YLC-16M (SMD2016-4P)
+    - C112572 X503216MSB2GI (SMD5032-2P)
+    sources:
+    - https://so.szlcsc.com/global.html?k=16MHz%20贴片晶振
+    tier_basis: 行业公认的 IDM 原厂（自有晶圆/封测产线）；本轮未逐一核官网
+  tkd:
+    name: TKD(泰晶)
+    aka:
+    - 泰晶
+    - 泰晶科技
+    - TKD
+    tier: original_idm
+    type: idm
+    country: CN
+    evidence: experience
+    confidence: high
+    risk_note: 原厂正品（国产晶振）。与扬兴同档，可互换。
+    observed:
+      records: 1
+      keywords:
+      - 16MHz 贴片晶振
+      min_price_cny: 0.423
+    typical_parts:
+    - C7420728 SX32Y016000BC1T001 (SMD3225-4P)
+    sources:
+    - https://so.szlcsc.com/global.html?k=16MHz%20贴片晶振
+    tier_basis: 行业公认的 IDM 原厂（自有晶圆/封测产线）；本轮未逐一核官网
+  cj:
+    name: CJ(江苏长电/长晶)
+    aka:
+    - 长电
+    - 长晶
+    - 长电科技
+    - JCET
+    tier: original_idm
+    type: idm
+    country: CN
+    evidence: experience
+    confidence: high
+    risk_note: 原厂正品（封测大厂自有品牌）。分立器件通用件，性价比好；同型号有 RANGE 分档（如 S8050 J3Y RANGE:200-350），hFE 档位不同不可混用。
+    observed:
+      records: 10
+      keywords:
+      - 16MHz 贴片晶振
+      - 1N4148W
+      - S8050
+      - SS34
+      - SS8050
+      min_price_cny: 0.0657
+    typical_parts:
+    - C2875286 CJ16-160000910B20 (SMD2016-4P)
+    - C2099 1N4148W (SOD-123)
+    - C2146 S8050 J3Y(RANGE:200-350) (SOT-23)
+    - C105433 S8050(RANGE:120-200) (SOT-23)
+    sources:
+    - https://so.szlcsc.com/global.html?k=16MHz%20贴片晶振
+    tier_basis: 行业公认的 IDM 原厂（自有晶圆/封测产线）；本轮未逐一核官网
+  yangjie:
+    name: YANGJIE(扬杰)
+    aka:
+    - 扬杰
+    - 扬杰科技
+    - Yangjie
+    tier: original_idm
+    type: idm
+    country: CN
+    evidence: experience
+    confidence: high
+    risk_note: 原厂正品（国产功率器件 IDM）。价格略高于贸易商品牌，但参数标注规范。
+    observed:
+      records: 3
+      keywords:
+      - 1N4148W
+      - S8050
+      - SS8050
+      min_price_cny: 0.1092
+    typical_parts:
+    - C388533 1N4148W (SOD-123)
+    - C699248 S8050-H (SOT-23(TO-236))
+    - C699255 SS8050-H (SOT-23)
+    sources:
+    - https://so.szlcsc.com/global.html?k=1N4148W
+    tier_basis: 行业公认的 IDM 原厂（自有晶圆/封测产线）；本轮未逐一核官网
+  晶导微电子:
+    name: 晶导微电子
+    aka:
+    - 晶导
+    - 晶导微
+    - Jingdao
+    tier: original_idm
+    type: idm
+    country: CN
+    evidence: experience
+    confidence: high
+    risk_note: 原厂正品（国产二极管 IDM）。小信号二极管性价比好。
+    observed:
+      records: 3
+      keywords:
+      - 1N4148W
+      - S8050
+      min_price_cny: 0.0481
+    typical_parts:
+    - C2875079 1N4148WL(T4) (SOD-123FL)
+    - C2762219 T-1N4148WB (SOD-323W)
+    - C2762211 S8050 (SOT-23)
+    sources:
+    - https://so.szlcsc.com/global.html?k=1N4148W
+    tier_basis: 行业公认的 IDM 原厂（自有晶圆/封测产线）；本轮未逐一核官网
+  松乐:
+    name: 松乐
+    aka:
+    - 松乐继电器
+    - Songle
+    - 松乐电子
+    tier: original_idm
+    type: idm
+    country: CN
+    evidence: experience
+    confidence: high
+    risk_note: 原厂正品（国产继电器龙头）。SRD 系列默认首选；触点容量 10A/250VAC 为常规款。
+    observed:
+      records: 1
+      keywords:
+      - SRD-05VDC-SL-C
+      min_price_cny: 2.71
+    typical_parts:
+    - C35449 SRD-05VDC-SL-C (插件,19.2x15.6mm)
+    sources:
+    - https://so.szlcsc.com/global.html?k=SRD-05VDC-SL-C
+    tier_basis: 行业公认的 IDM 原厂（自有晶圆/封测产线）；本轮未逐一核官网
+  boomele:
+    name: BOOMELE(博穆精密)
+    aka:
+    - 博穆
+    - Boomele
+    - 博穆精密
+    tier: original_idm
+    type: idm
+    country: CN
+    evidence: experience
+    confidence: high
+    risk_note: 原厂正品（国产连接器）。2.54 排针默认首选，型号即规格（如 2.54-1*40P直针）。
+    observed:
+      records: 3
+      keywords:
+      - 2.54 排针 40P
+      min_price_cny: 0.9725
+    typical_parts:
+    - C2337 2.54-1*40P直针 (插件,P=2.54mm)
+    - C2334 2.54-1*40P正弯针 (弯插,P=2.54mm)
+    - C9742 2.54-1*40P圆针 (插件,P=2.54mm)
+    sources:
+    - https://so.szlcsc.com/global.html?k=2.54%20排针%2040P
+    tier_basis: 行业公认的 IDM 原厂（自有晶圆/封测产线）；本轮未逐一核官网
+  wch:
+    name: WCH(南京沁恒)
+    aka:
+    - 沁恒
+    - WCH
+    - 南京沁恒微电子
+    tier: original_fabless
+    type: fabless
+    country: CN
+    evidence: experience
+    confidence: medium
+    risk_note: 原厂 Fabless。CH340/CH341 系列原厂；认准 WCH 牌，其它牌多为兼容芯片，驱动兼容性需实测。
+    observed:
+      records: 1
+      keywords:
+      - CH340C
+      min_price_cny: 3.33
+    typical_parts:
+    - C84681 CH340C (SOP-16)
+    sources:
+    - https://so.szlcsc.com/global.html?k=CH340C
+    tier_basis: 行业公认的 Fabless 原厂（自有设计与型号）；本轮未逐一核官网
+  gigadevice:
+    name: GigaDevice(兆易创新)
+    aka:
+    - 兆易创新
+    - GD
+    - GigaDevice
+    tier: original_fabless
+    type: fabless
+    country: CN
+    evidence: experience
+    confidence: medium
+    risk_note: 原厂 Fabless。GD32 与 STM32 引脚兼容但外设时序不同，直接换料必须重测固件。
+    observed:
+      records: 1
+      keywords:
+      - STM32F103C8T6
+      min_price_cny: 6.37
+    typical_parts:
+    - C129291 GD32F330C8T6 (LQFP-48(7x7))
+    sources:
+    - https://so.szlcsc.com/global.html?k=STM32F103C8T6
+    tier_basis: 行业公认的 Fabless 原厂（自有设计与型号）；本轮未逐一核官网
+  geehy:
+    name: Geehy(极海半导体)
+    aka:
+    - 极海
+    - 极海半导体
+    - APM
+    tier: original_fabless
+    type: fabless
+    country: CN
+    evidence: experience
+    confidence: medium
+    risk_note: 原厂 Fabless。APM32 为 STM32 国产替代，引脚兼容；替换须核对 Flash/RAM 与时钟树差异。
+    observed:
+      records: 1
+      keywords:
+      - STM32F103C8T6
+      min_price_cny: 7.59
+    typical_parts:
+    - C393540 APM32F103C8T6 (LQFP-48(7x7))
+    sources:
+    - https://so.szlcsc.com/global.html?k=STM32F103C8T6
+    tier_basis: 行业公认的 Fabless 原厂（自有设计与型号）；本轮未逐一核官网
+  3peak:
+    name: 3PEAK(思瑞浦)
+    aka:
+    - 思瑞浦
+    - 3PEAK
+    tier: original_fabless
+    type: fabless
+    country: CN
+    evidence: experience
+    confidence: medium
+    risk_note: 原厂 Fabless。运放/电源，参数标注规范，可作 TI 替代。
+    observed:
+      records: 1
+      keywords:
+      - LM358
+      min_price_cny: 0.4771
+    typical_parts:
+    - C415708 LM358A-SR (SOIC-8)
+    sources:
+    - https://so.szlcsc.com/global.html?k=LM358
+    tier_basis: 行业公认的 Fabless 原厂（自有设计与型号）；本轮未逐一核官网
+  西安航天民芯:
+    name: 西安航天民芯
+    aka:
+    - 航天民芯
+    - Aerosemi
+    - 民芯
+    tier: original_fabless
+    type: fabless
+    country: CN
+    evidence: experience
+    confidence: medium
+    risk_note: 原厂 Fabless。MT3608 升压原厂（丝印 MT3608），国产 DC-DC 性价比高；注意 MT3608L 为低压版。
+    observed:
+      records: 4
+      keywords:
+      - MT3608
+      min_price_cny: 0.3411
+    typical_parts:
+    - C84817 MT3608 (SOT-23-6)
+    - C2932326 MT3608L (SOT-23-6)
+    - C19189893 MT3608B (SOT-23-6)
+    - C49339555 MT3608 (SOT-23-6)
+    sources:
+    - https://so.szlcsc.com/global.html?k=MT3608
+    tier_basis: 行业公认的 Fabless 原厂（自有设计与型号）；本轮未逐一核官网
+  aos:
+    name: AOS
+    aka:
+    - 万代半导体
+    - Alpha & Omega
+    - AOS
+    tier: original_fabless
+    type: fabless
+    country: US
+    evidence: experience
+    confidence: medium
+    risk_note: 原厂 Fabless。AO3400 系列原始厂牌；同型号不同品牌 Rds(on) 的测试 Vgs 条件不同，不可直接比数值。
+    observed:
+      records: 2
+      keywords:
+      - AO3400
+      min_price_cny: 0.543
+    typical_parts:
+    - C20917 AO3400A (SOT-23)
+    - C541722 AO3400C (SOT-23)
+    sources:
+    - https://so.szlcsc.com/global.html?k=AO3400
+    tier_basis: 行业公认的 Fabless 原厂（自有设计与型号）；本轮未逐一核官网
+  fm:
+    name: FM(富满)
+    aka:
+    - 富满
+    - 富满微
+    - FM
+    tier: original_fabless
+    type: fabless
+    country: CN
+    evidence: experience
+    confidence: medium
+    risk_note: 原厂 Fabless。电源/运放，价格低；参数需按手册核对。
+    observed:
+      records: 1
+      keywords:
+      - LM358
+      min_price_cny: 0.2846
+    typical_parts:
+    - C83902 LM358S (SOP-8)
+    sources:
+    - https://so.szlcsc.com/global.html?k=LM358
+    tier_basis: 行业公认的 Fabless 原厂（自有设计与型号）；本轮未逐一核官网
+  seaward:
+    name: SEAWARD(思旺)
+    aka:
+    - 思旺
+    - Seaward
+    tier: original_fabless
+    type: fabless
+    country: CN
+    evidence: experience
+    confidence: medium
+    risk_note: 原厂 Fabless。SE3608 为 MT3608 的兼容型号，外围需核对。
+    observed:
+      records: 1
+      keywords:
+      - MT3608
+      min_price_cny: 0.6396
+    typical_parts:
+    - C114986 SE3608 (SOT-23-6)
+    sources:
+    - https://so.szlcsc.com/global.html?k=MT3608
+    tier_basis: 行业公认的 Fabless 原厂（自有设计与型号）；本轮未逐一核官网
+  fcm:
+    name: FCM(闪芯微)
+    aka:
+    - 闪芯微
+    - FCM
+    tier: original_fabless
+    type: fabless
+    country: CN
+    evidence: experience
+    confidence: medium
+    risk_note: 原厂 Fabless。FCM32F103 为 STM32F103 国产替代，引脚兼容；价格约 ¥5.54（原厂 ¥9.12）。
+    observed:
+      records: 1
+      keywords:
+      - STM32F103C8T6
+      min_price_cny: 5.54
+    typical_parts:
+    - C3151837 FCM32F103C8T6 (LQFP-48(7x7))
+    sources:
+    - https://so.szlcsc.com/global.html?k=STM32F103C8T6
+    tier_basis: 行业公认的 Fabless 原厂（自有设计与型号）；本轮未逐一核官网
+  umw:
+    name: UMW(友台半导体)
+    aka:
+    - 友台
+    - UMW
+    - 友台半导体
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。同型号（AMS1117/LM2596/AO3400A/PC817）价格约为原厂 1/3~1/5，通用场合可用；量产需确认批次一致性。
+    observed:
+      records: 19
+      keywords:
+      - AMS1117-3.3
+      - AO3400
+      - LM2596
+      - LM358
+      - NE555
+      - PC817
+      - SS34
+      - SS8050
+      - TL431
+      min_price_cny: 0.0879
+    typical_parts:
+    - C347222 AMS1117-3.3 (SOT-223)
+    - C347256 AMS1117-3.3S (SOT-89)
+    - C347475 AO3400A (SOT-23)
+    - C347421 LM2596S-5.0(UMW) (TO-263-5)
+    sources:
+    - https://so.szlcsc.com/global.html?k=AMS1117-3.3
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  hgsemi:
+    name: HGSEMI(华冠)
+    aka:
+    - 华冠
+    - HGSEMI
+    - 华冠半导体
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。电源/运放/555，价格低；关键参数（温漂、PSRR）通常不标全。
+    observed:
+      records: 7
+      keywords:
+      - LM2596
+      - LM358
+      - NE555
+      min_price_cny: 0.2996
+    typical_parts:
+    - C194349 LM2596S-5.0/TR (TO-263-5)
+    - C194351 LM2596S-ADJ/TR (TO-263-5)
+    - C194352 LM2596S-12/TR (TO-263-5)
+    - C398078 LM358M/TR (SOP-8)
+    sources:
+    - https://so.szlcsc.com/global.html?k=LM2596
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  htc:
+    name: HTC
+    aka:
+    - HTC
+    - 韩国 HTC
+    tier: domestic_second
+    type: second_source
+    country: TW
+    evidence: measured
+    confidence: medium
+    risk_note: 国产/台系二线。555/LM2596 兼容件，价格波动大（NE555 达 ¥1.48，属高价）。
+    observed:
+      records: 4
+      keywords:
+      - LM2596
+      - NE555
+      min_price_cny: 1.477
+    typical_parts:
+    - C52684 LM2596R-ADJ (TO-263-5)
+    - C90690 LM2596R-3.3 (TO-263-5)
+    - C596355 NE555D (SOP-8)
+    - C510566 NE555N (DIP-8)
+    sources:
+    - https://so.szlcsc.com/global.html?k=LM2596
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  tech-public:
+    name: TECH PUBLIC(台舟)
+    aka:
+    - 台舟
+    - Tech Public
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。LDO/二极管/555，价格低；datasheet 常缺关键曲线。
+    observed:
+      records: 8
+      keywords:
+      - AMS1117-3.3
+      - AO3400
+      - LM2596
+      - NE555
+      min_price_cny: 0.1586
+    typical_parts:
+    - C18212698 AMS1117-3.3 (SOT-223)
+    - C46473005 AMS1117-3.3S (SOT-89)
+    - C20611856 AMS1117-3.3V (SOT-223)
+    - C49452393 AO3400L (SOT-23)
+    sources:
+    - https://so.szlcsc.com/global.html?k=AMS1117-3.3
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  mdd:
+    name: MDD(辰达半导体)
+    aka:
+    - 辰达
+    - MDD
+    - 辰达半导体
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。二极管/三极管，型号后缀（-E/-TP）为包装差异，电气等同。
+    observed:
+      records: 9
+      keywords:
+      - 1N4148W
+      - S8050
+      - SS34
+      - SS8050
+      - TL431
+      min_price_cny: 0.0429
+    typical_parts:
+    - C41371420 1N4148W-E (SOD-123)
+    - C84367 1N4148W (SOD-123)
+    - C364312 S8050 (SOT-23)
+    - C45406501 SS34-E (SMA)
+    sources:
+    - https://so.szlcsc.com/global.html?k=1N4148W
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  born:
+    name: BORN(伯恩半导体)
+    aka:
+    - 伯恩
+    - BORN
+    - 伯恩半导体
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。ESD/TVS/二极管，价格中等偏上。
+    observed:
+      records: 5
+      keywords:
+      - AO3400
+      - S8050
+      - SS34
+      min_price_cny: 0.1004
+    typical_parts:
+    - C344010 AO3400A (SOT-23)
+    - C2848737 AO3400 (SOT-23)
+    - C266592 S8050 (SOT-23)
+    - C511866 DSS34 (SOD-123FL)
+    sources:
+    - https://so.szlcsc.com/global.html?k=AO3400
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  slkor:
+    name: Slkor(萨科微)
+    aka:
+    - 萨科微
+    - Slkor
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。分立器件，价格偏高于同类国产（SS34 ¥0.2447），性价比一般。
+    observed:
+      records: 7
+      keywords:
+      - 1N4148W
+      - AMS1117-3.3
+      - PC817
+      - S8050
+      - SS34
+      - SS8050
+      min_price_cny: 0.0536
+    typical_parts:
+    - C444720 1N4148W (SOD-123)
+    - C880752 AMS1117-3.3 (SOT-89-3)
+    - C2936043 PC817C (SMD-4P)
+    - C444723 S8050 (SOT-23)
+    sources:
+    - https://so.szlcsc.com/global.html?k=1N4148W
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  twgmc:
+    name: TWGMC(迪嘉)
+    aka:
+    - 迪嘉
+    - TWGMC
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。二极管/三极管/LDO，价格中档。
+    observed:
+      records: 9
+      keywords:
+      - 1N4148W
+      - AMS1117-3.3
+      - AO3400
+      - LM2596
+      - SS34
+      - SS8050
+      min_price_cny: 0.0591
+    typical_parts:
+    - C727110 1N4148W (SOD-123)
+    - C5250992 AMS1117-3.3 (SOT-223-3L)
+    - C727155 AO3400 (SOT-23)
+    - C5276750 LM2596S-5.0 (TO-263-5)
+    sources:
+    - https://so.szlcsc.com/global.html?k=1N4148W
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  hkt:
+    name: HKT(合科泰)
+    aka:
+    - 合科泰
+    - HKT
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。分立器件，价格偏低。
+    observed:
+      records: 6
+      keywords:
+      - 1N4148W
+      - AO3400
+      - S8050
+      - SS34
+      - SS8050
+      - TL431
+      min_price_cny: 0.0403
+    typical_parts:
+    - C181134 1N4148W-T4 (SOD-123)
+    - C181090 AO3400 (SOT-23)
+    - C181158 S8050 (SOT-23)
+    - C2886580 SS34A (SMA(DO-214AC))
+    sources:
+    - https://so.szlcsc.com/global.html?k=1N4148W
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  shikues:
+    name: SHIKUES(时科)
+    aka:
+    - 时科
+    - SHIKUES
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。分立器件，价格中档。
+    observed:
+      records: 4
+      keywords:
+      - 1N4148W
+      - S8050
+      - SS8050
+      - TL431
+      min_price_cny: 0.0709
+    typical_parts:
+    - C109203 1N4148W (SOD-123)
+    - C111272 S8050 (SOT-23)
+    - C111765 SS8050 (SOT-23)
+    - C111578 TL431 (SOT-23)
+    sources:
+    - https://so.szlcsc.com/global.html?k=1N4148W
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  msksemi:
+    name: MSKSEMI(美森科)
+    aka:
+    - 美森科
+    - MSKSEMI
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。型号常带 -MS 后缀；TL431 报 ¥0.1375 为同品类最低档之一。
+    observed:
+      records: 9
+      keywords:
+      - AMS1117-3.3
+      - AO3400
+      - LM358
+      - NE555
+      - PC817
+      - SS34
+      - SS8050
+      - TL431
+      min_price_cny: 0.0723
+    typical_parts:
+    - C5120796 AMS1117-3.3V (SOT-89)
+    - C5120765 AMS1117-3.3V (SOT-223)
+    - C19632011 AO3400A-MS (SOT-23)
+    - C5252902 LM358 (SOP-8)
+    sources:
+    - https://so.szlcsc.com/global.html?k=AMS1117-3.3
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  yongyutai:
+    name: YONGYUTAI(永裕泰)
+    aka:
+    - 永裕泰
+    - YONGYUTAI
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。横跨 7 个品类，型号后缀混乱（1N4148W/1N4148WX/1N4148WL），替代时须核对封装。
+    observed:
+      records: 12
+      keywords:
+      - 1N4148W
+      - AMS1117-3.3
+      - AO3400
+      - NE555
+      - S8050
+      - SS34
+      - SS8050
+      min_price_cny: 0.0564
+    typical_parts:
+    - C2892570 1N4148W (SOD-123)
+    - C19089391 1N4148WX (SOD-323)
+    - C5119556 1N4148W T4 (SOD-123)
+    - C2891839 AMS1117-3.3 (SOT-223)
+    sources:
+    - https://so.szlcsc.com/global.html?k=1N4148W
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  fojan:
+    name: FOJAN(富捷)
+    aka:
+    - 富捷
+    - FOJAN
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。阻容（0603/0805 电阻电容），价格低，0603 1% 10k 报 ¥0.0114。
+    observed:
+      records: 5
+      keywords:
+      - 100nF 0603 50V
+      - 10k 0603 1%
+      min_price_cny: 0.0114
+    typical_parts:
+    - C5137636 FCC0603B104K500CT (0603)
+    - C7419417 FCC0603B104M500CT (0603)
+    - C7467151 FCC0603B104J500CT (0603)
+    - C2906982 FRC0603F1002TS (0603)
+    sources:
+    - https://so.szlcsc.com/global.html?k=100nF%200603%2050V
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  hxy-mosfet:
+    name: HXY MOSFET(华轩阳电子)
+    aka:
+    - 华轩阳
+    - HXY
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。MOS/三极管/光耦，型号带 -HXY 后缀，丝印与型号不一致是常态，入库须核对。
+    observed:
+      records: 11
+      keywords:
+      - 1N4148W
+      - AO3400
+      - NE555
+      - PC817
+      - S8050
+      - SS8050
+      min_price_cny: 0.0526
+    typical_parts:
+    - C5345962 1N4148W (SOD-123)
+    - C4748722 AO3400-ED (SOT-23)
+    - C4748804 AO3400-HXY (SOT-23)
+    - C20616346 NE555P-HXY (DIP-8)
+    sources:
+    - https://so.szlcsc.com/global.html?k=1N4148W
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  fuxinsemi:
+    name: FUXINSEMI(富芯森美)
+    aka:
+    - 富芯森美
+    - FUXINSEMI
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。分立器件，价格中档。
+    observed:
+      records: 4
+      keywords:
+      - AO3400
+      - S8050
+      - SS34
+      - SS8050
+      min_price_cny: 0.0769
+    typical_parts:
+    - C5380685 AO3400A (SOT-23)
+    - C908252 S8050 (SOT-23)
+    - C5380710 DSS34 (SOD-123)
+    - C908250 SS8050 (SOT-23)
+    sources:
+    - https://so.szlcsc.com/global.html?k=AO3400
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  baocheng:
+    name: baocheng(宝乘)
+    aka:
+    - 宝乘
+    - Baocheng
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。分立器件/LDO，价格低。
+    observed:
+      records: 4
+      keywords:
+      - 1N4148W
+      - AO3400
+      - S8050
+      - SS34
+      min_price_cny: 0.049
+    typical_parts:
+    - C47117477 1N4148W (SOD-123)
+    - C48678023 AO3400A (SOT-23)
+    - C51898306 S8050 (SOT-23)
+    - C47018524 SS34 (SMA)
+    sources:
+    - https://so.szlcsc.com/global.html?k=1N4148W
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  gmic:
+    name: GMIC(绿微)
+    aka:
+    - 绿微
+    - GMIC
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。运放/555/LDO，价格为同品类最低档（LM358 ¥0.1767、NE555 ¥0.142），参数标注简略。
+    observed:
+      records: 8
+      keywords:
+      - AMS1117-3.3
+      - AO3400
+      - LM358
+      - NE555
+      - S8050
+      min_price_cny: 0.0615
+    typical_parts:
+    - C50313803 AMS1117-3.3OE (SOT-223)
+    - C50313804 AMS1117-3.3TF (TO-252)
+    - C50313802 AMS1117-3.3OF (SOT-89)
+    - C53261042 AO3400 (SOT-23)
+    sources:
+    - https://so.szlcsc.com/global.html?k=AMS1117-3.3
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  alj:
+    name: ALJ(龙晶微)
+    aka:
+    - 龙晶微
+    - ALJ
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。三极管/MOS，价格低。
+    observed:
+      records: 3
+      keywords:
+      - AO3400
+      - SS8050
+      min_price_cny: 0.0776
+    typical_parts:
+    - C22751456 AO3400 (SOT-23)
+    - C22458785 SS8050(SOT-23) (SOT-23)
+    - C22400468 SS8050 (SOT-89)
+    sources:
+    - https://so.szlcsc.com/global.html?k=AO3400
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  realchip:
+    name: RealChip(正芯半导体)
+    aka:
+    - 正芯
+    - RealChip
+    - 正芯半导体
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。二极管/三极管，价格低。
+    observed:
+      records: 2
+      keywords:
+      - 1N4148W
+      - S8050
+      min_price_cny: 0.0421
+    typical_parts:
+    - C5443965 1N4148W (SOD-123)
+    - C5443972 S8050 (SOT-23)
+    sources:
+    - https://so.szlcsc.com/global.html?k=1N4148W
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  ddf:
+    name: DDF(鼎德丰)
+    aka:
+    - 鼎德丰
+    - DDF
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。光耦/三极管，PC817 报 ¥0.1026 为同品类最低档，CTR 分档需实测。
+    observed:
+      records: 3
+      keywords:
+      - PC817
+      - S8050
+      min_price_cny: 0.0521
+    typical_parts:
+    - C50229496 PC817C-FEL-D (DIP-4)
+    - C50229500 PC817A-FEL-D (DIP-4)
+    - C50229533 S8050-SOT-23 (SOT-23)
+    sources:
+    - https://so.szlcsc.com/global.html?k=PC817
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  sep:
+    name: SEP(威旺)
+    aka:
+    - 威旺
+    - SEP
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。分立器件，价格最低档。
+    observed:
+      records: 3
+      keywords:
+      - AO3400
+      - S8050
+      - SS8050
+      min_price_cny: 0.0489
+    typical_parts:
+    - C50176479 AO3400 (SOT-23)
+    - C50176455 S8050 (SOT-23)
+    - C50176454 SS8050 (SOT-23)
+    sources:
+    - https://so.szlcsc.com/global.html?k=AO3400
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  anbon:
+    name: AnBon(安邦)
+    aka:
+    - 安邦
+    - AnBon
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。分立器件，价格中档偏上。
+    observed:
+      records: 1
+      keywords:
+      - S8050
+      min_price_cny: 0.0935
+    typical_parts:
+    - C397180 S8050 (SOT-23)
+    sources:
+    - https://so.szlcsc.com/global.html?k=S8050
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  blue-rocket:
+    name: BLUE ROCKET(蓝箭)
+    aka:
+    - 蓝箭
+    - Blue Rocket
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。三极管，型号带 M-D 后缀。
+    observed:
+      records: 1
+      keywords:
+      - S8050
+      min_price_cny: 0.0567
+    typical_parts:
+    - C2844025 S8050M-D (SOT-23)
+    sources:
+    - https://so.szlcsc.com/global.html?k=S8050
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  tdsemic:
+    name: TDSEMIC(拓电半导体)
+    aka:
+    - 拓电
+    - TDSEMIC
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。型号带 -TD 后缀；同一型号有多个 hFE 档（S8050 J3Y 0.4）。
+    observed:
+      records: 10
+      keywords:
+      - 1N4148W
+      - NE555
+      - S8050
+      - SS8050
+      - W25Q64
+      min_price_cny: 0.0402
+    typical_parts:
+    - C42441811 1N4148W T4 (SOD-123)
+    - C42422056 NE555N-TD (DIP-8)
+    - C42422057 NE555-TD (SOP-8)
+    - C42441446 S8050 J3Y (SOT-23)
+    sources:
+    - https://so.szlcsc.com/global.html?k=1N4148W
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  aote:
+    name: AOTE(奥特)
+    aka:
+    - 奥特
+    - AOTE
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。光耦/555，PC817 报 ¥0.1389 为低价档。
+    observed:
+      records: 5
+      keywords:
+      - NE555
+      - PC817
+      min_price_cny: 0.1389
+    typical_parts:
+    - C55533681 NE555DR(AT) (SOP-8)
+    - C20612591 PC817CS (SOP-4)
+    - C20612594 PC817C (DIP-4)
+    - C22375537 PC817AS (SMD-4P)
+    sources:
+    - https://so.szlcsc.com/global.html?k=NE555
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  puolop:
+    name: PUOLOP(迪浦)
+    aka:
+    - 迪浦
+    - PUOLOP
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。MOS 兼容件。
+    observed:
+      records: 1
+      keywords:
+      - AO3400
+      min_price_cny: 0.2109
+    typical_parts:
+    - C332101 AO3400-SOT23 (SOT-23)
+    sources:
+    - https://so.szlcsc.com/global.html?k=AO3400
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  lge:
+    name: LGE(鲁光)
+    aka:
+    - 鲁光
+    - LGE
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。MOS/三极管。
+    observed:
+      records: 1
+      keywords:
+      - AO3400
+      min_price_cny: 0.2768
+    typical_parts:
+    - C841146 AO3400 (SOT-23)
+    sources:
+    - https://so.szlcsc.com/global.html?k=AO3400
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  elecsuper:
+    name: ElecSuper(静芯)
+    aka:
+    - 静芯
+    - ElecSuper
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。MOS 兼容件（AO3400 系列）。
+    observed:
+      records: 2
+      keywords:
+      - AO3400
+      min_price_cny: 0.1977
+    typical_parts:
+    - C5224189 AO3400 (SOT-23)
+    - C5224194 AO3400A (SOT23-3L)
+    sources:
+    - https://so.szlcsc.com/global.html?k=AO3400
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  huashuo:
+    name: HUASHUO(华朔)
+    aka:
+    - 华朔
+    - HUASHUO
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。MOS 兼容件。
+    observed:
+      records: 1
+      keywords:
+      - AO3400
+      min_price_cny: 0.2694
+    typical_parts:
+    - C700953 AO3400A (SOT-23)
+    sources:
+    - https://so.szlcsc.com/global.html?k=AO3400
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  heermicr:
+    name: HEERMICR(赫尔半导体)
+    aka:
+    - 赫尔
+    - Heermicr
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。LDO，AMS1117 报 ¥0.478 属高价，性价比一般。
+    observed:
+      records: 1
+      keywords:
+      - AMS1117-3.3
+      min_price_cny: 0.478
+    typical_parts:
+    - C5199435 AMS1117-3.3 (SOT-223)
+    sources:
+    - https://so.szlcsc.com/global.html?k=AMS1117-3.3
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  kexin:
+    name: KEXIN(科信)
+    aka:
+    - 科信
+    - Kexin
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。LDO 兼容件。
+    observed:
+      records: 1
+      keywords:
+      - AMS1117-3.3
+      min_price_cny: 0.3535
+    typical_parts:
+    - C369933 AMS1117-3.3 (SOT-223-4)
+    sources:
+    - https://so.szlcsc.com/global.html?k=AMS1117-3.3
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  wpmtek:
+    name: WPMtek(维攀)
+    aka:
+    - 维攀
+    - WPMtek
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。LDO 兼容件。
+    observed:
+      records: 1
+      keywords:
+      - AMS1117-3.3
+      min_price_cny: 0.3993
+    typical_parts:
+    - C2688239 AMS1117-3.3V (SOT-223-3L)
+    sources:
+    - https://so.szlcsc.com/global.html?k=AMS1117-3.3
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  gr:
+    name: GR(国睿)
+    aka:
+    - 国睿
+    - GR
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。电源/555/LM2596，价格低于原厂。
+    observed:
+      records: 4
+      keywords:
+      - AMS1117-3.3
+      - LM2596
+      - NE555
+      min_price_cny: 0.2423
+    typical_parts:
+    - C18164485 AMS1117-3.3 (SOT-223)
+    - C19631823 LM2596S-5.0 (TO-263-5L)
+    - C49443605 LM2596-ADJFW05ARHQ (TO-263-5)
+    - C18164403 NE555 (SOP-8)
+    sources:
+    - https://so.szlcsc.com/global.html?k=AMS1117-3.3
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  hgc:
+    name: HGC(深圳汉芯)
+    aka:
+    - 深圳汉芯
+    - HGC
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。电源/运放，型号带 RG 后缀。
+    observed:
+      records: 5
+      keywords:
+      - AMS1117-3.3
+      - LM2596
+      - LM358
+      min_price_cny: 0.2305
+    typical_parts:
+    - C2977152 AMS1117-3.3RG (SOT-223)
+    - C5157156 LM2596S-5.0RG (TO-263-5)
+    - C2977092 LM2596S-5.0RG (TO-263-5)
+    - C5145450 LM358DRG (SOP-8)
+    sources:
+    - https://so.szlcsc.com/global.html?k=AMS1117-3.3
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  hre:
+    name: HRE(芯声)
+    aka:
+    - 芯声
+    - HRE
+    - 广东芯声
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线（MLCC）。0603 100nF 报 ¥0.0238，性价比好。
+    observed:
+      records: 3
+      keywords:
+      - 100nF 0603 50V
+      min_price_cny: 0.0238
+    typical_parts:
+    - C3012381 CSA0603X7R104K500JT (0603)
+    - C6119867 CGA0603X7R104K500JT (0603)
+    - C52711259 CGA0603X7R104M500JT (0603)
+    sources:
+    - https://so.szlcsc.com/global.html?k=100nF%200603%2050V
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  jierr:
+    name: JIERR(捷而瑞)
+    aka:
+    - 捷而瑞
+    - JIERR
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。铝电解/电感，价格低。
+    observed:
+      records: 8
+      keywords:
+      - 100uF 25V 铝电解
+      - 10uH 电感
+      min_price_cny: 0.248
+    typical_parts:
+    - C46550402 JVJ25V100M6x5 (SMD,D6.3xL5.4mm)
+    - C51953404 JVS25V100M6X4 (SMD,D6.3xL4.5mm)
+    - C48615121 JVE25V100M6X8 (SMD,D6.3xL7.7mm)
+    - C47023107 RVT25V100M6X5 (SMD,D6.3xL5.4mm)
+    sources:
+    - https://so.szlcsc.com/global.html?k=100uF%2025V%20铝电解
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  knscha:
+    name: KNSCHA(科尼盛)
+    aka:
+    - 科尼盛
+    - KNSCHA
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。铝电解，100µF/25V 报 ¥0.2413~0.2228，性价比好。
+    observed:
+      records: 5
+      keywords:
+      - 100uF 25V 铝电解
+      - 10uF 16V 钽电容
+      min_price_cny: 0.2413
+    typical_parts:
+    - C4747964 RST100UF25V004 (SMD,D6.3xL5.4mm)
+    - C2836443 RVT100UF25V67RV0011 (SMD,D6.3xL7.7mm)
+    - C18203141 189RV0061 (SMD,D6.3xL5.7mm)
+    - C5246580 VT100UF25V167RV0125 (SMD,D6.3xL7.7mm)
+    sources:
+    - https://so.szlcsc.com/global.html?k=100uF%2025V%20铝电解
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  roqang:
+    name: ROQANG(容强)
+    aka:
+    - 容强
+    - ROQANG
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。铝电解，报 ¥0.1719 属低价档。
+    observed:
+      records: 4
+      keywords:
+      - 100uF 25V 铝电解
+      min_price_cny: 0.1719
+    typical_parts:
+    - C72477 RVT1E101M0607 (SMD,D6.3xL7.7mm)
+    - C267469 RT1E101M0607 (SMD,D6.3xL7.7mm)
+    - C3001245 CK1E101M-CRE77 (SMD,D6.3xL7.7mm)
+    - C2918360 RVT1E101M0605 (SMD,D6.3xL5.4mm)
+    sources:
+    - https://so.szlcsc.com/global.html?k=100uF%2025V%20铝电解
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  dmbj:
+    name: DMBJ(振宝佳)
+    aka:
+    - 振宝佳
+    - DMBJ
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。铝电解。
+    observed:
+      records: 1
+      keywords:
+      - 100uF 25V 铝电解
+      min_price_cny: 0.2507
+    typical_parts:
+    - C970685 RVT1E101M0607 100UF 25V (SMD,D6.3xL7.7mm)
+    sources:
+    - https://so.szlcsc.com/global.html?k=100uF%2025V%20铝电解
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  honor:
+    name: HONOR(荣誉)
+    aka:
+    - 荣誉
+    - HONOR 电容
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。铝电解；品牌名与手机品牌同名，注意别混。
+    observed:
+      records: 1
+      keywords:
+      - 100uF 25V 铝电解
+      min_price_cny: 0.2184
+    typical_parts:
+    - C3338 RVT1E101M0607 (SMD,D6.3xL7.7mm)
+    sources:
+    - https://so.szlcsc.com/global.html?k=100uF%2025V%20铝电解
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  jarson:
+    name: JARSON(伽盛)
+    aka:
+    - 伽盛
+    - Jarson
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。铝电解。
+    observed:
+      records: 1
+      keywords:
+      - 100uF 25V 铝电解
+      min_price_cny: 0.215
+    typical_parts:
+    - C52268577 XS1E101M0605 (SMD,D6.3xL5.4mm)
+    sources:
+    - https://so.szlcsc.com/global.html?k=100uF%2025V%20铝电解
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  rs:
+    name: RS(容硕)
+    aka:
+    - 容硕
+    - RS 电容
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。铝电解；缩写 RS 与 RS Components 渠道同名，检索时注意区分。
+    observed:
+      records: 2
+      keywords:
+      - 100uF 25V 铝电解
+      min_price_cny: 0.2113
+    typical_parts:
+    - C5123995 VT1E101M-CRE77 (SMD,D6.3xL7.7mm)
+    - C19077961 RVT1E101M0605 (SMD,D6.3xL5.4mm)
+    sources:
+    - https://so.szlcsc.com/global.html?k=100uF%2025V%20铝电解
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  hrk:
+    name: HRK(鸿瑞凯电子)
+    aka:
+    - 鸿瑞凯
+    - HRK
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。铝电解。
+    observed:
+      records: 1
+      keywords:
+      - 100uF 25V 铝电解
+      min_price_cny: 0.2172
+    typical_parts:
+    - C2983552 GVT1E107M0606CNVC (SMD,D6.3xL5.7mm)
+    sources:
+    - https://so.szlcsc.com/global.html?k=100uF%2025V%20铝电解
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  acmecon:
+    name: ACMECON(鼎容)
+    aka:
+    - 鼎容
+    - Acmecon
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。铝电解（100uF/25V 实测 ¥0.1934）；缩写真名以立创为准。
+    observed:
+      records: 1
+      keywords:
+      - 100uF 25V 铝电解
+      min_price_cny: 0.1934
+    typical_parts:
+    - C22383797 RVT1E101M0605 (SMD,D6.3xL5.4mm)
+    sources:
+    - https://so.szlcsc.com/global.html?k=100uF%2025V%20铝电解
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  huawei:
+    name: HUAWEI(华威集团)
+    aka:
+    - 华威集团
+    - HUAWEI 华威
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。铝电解；**品牌名与华为同名易混淆**，不是华为，别当原厂。
+    observed:
+      records: 1
+      keywords:
+      - 100uF 25V 铝电解
+      min_price_cny: 0.4499
+    typical_parts:
+    - C240550 VS1E101ME077000CE0 (SMD,D6.3xL7.7mm)
+    sources:
+    - https://so.szlcsc.com/global.html?k=100uF%2025V%20铝电解
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  psa:
+    name: PSA(信昌电陶)
+    aka:
+    - 信昌
+    - PSA
+    - 信昌电陶
+    tier: domestic_second
+    type: second_source
+    country: TW
+    evidence: measured
+    confidence: medium
+    risk_note: 台系二线。MLCC。
+    observed:
+      records: 1
+      keywords:
+      - 100nF 0603 50V
+      min_price_cny: 0.0746
+    typical_parts:
+    - C235731 FN18X104K500PBG (0603)
+    sources:
+    - https://so.szlcsc.com/global.html?k=100nF%200603%2050V
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  yjycoin:
+    name: YJYCOIN(益嘉源)
+    aka:
+    - 益嘉源
+    - YJYCOIN
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。电感/磁珠，价格偏高（磁珠 ¥0.1186）。
+    observed:
+      records: 2
+      keywords:
+      - 0603 磁珠
+      min_price_cny: 0.1186
+    typical_parts:
+    - C2971884 YI160808U601-2R0T (0603)
+    - C3011209 YI160808U100-3R0T (0603)
+    sources:
+    - https://so.szlcsc.com/global.html?k=0603%20磁珠
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  cjiang:
+    name: cjiang(长江微电)
+    aka:
+    - 长江微电
+    - cjiang
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。电感，型号 FTC/FXL 系列。
+    observed:
+      records: 11
+      keywords:
+      - 10uH 电感
+      min_price_cny: 0.2706
+    typical_parts:
+    - C5832376 FTC252012S100MBCA (1008)
+    - C167223 FXL0630-100-M (SMD,7x6.6mm)
+    - C602032 FHD4020S-100MT (SMD,4x4mm)
+    - C177248 FXL0530-100-M (SMD,5.4x5.2mm)
+    sources:
+    - https://so.szlcsc.com/global.html?k=10uH%20电感
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  coilank:
+    name: Coilank(驰兴电感)
+    aka:
+    - 驰兴
+    - Coilank
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。功率电感，价格偏高。
+    observed:
+      records: 2
+      keywords:
+      - 10uH 电感
+      min_price_cny: 0.6969
+    typical_parts:
+    - C47327207 APS0630M100A (SMD,7.7x6.6mm)
+    - C47327321 AAPS0530M100A (SMD,5.8x5.2mm)
+    sources:
+    - https://so.szlcsc.com/global.html?k=10uH%20电感
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  sxn:
+    name: SXN(顺翔诺)
+    aka:
+    - 顺翔诺
+    - SXN
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。功率电感。
+    observed:
+      records: 2
+      keywords:
+      - 10uH 电感
+      min_price_cny: 0.5484
+    typical_parts:
+    - C128692 SMMS0630-100M (SMD,7.3x6.6mm)
+    - C133195 SMMS0420-100M (SMD,4.6x4.2mm)
+    sources:
+    - https://so.szlcsc.com/global.html?k=10uH%20电感
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  sunltech:
+    name: Sunltech(顺磁)
+    aka:
+    - 顺磁
+    - Sunltech
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。电感。
+    observed:
+      records: 1
+      keywords:
+      - 10uH 电感
+      min_price_cny: 0.2297
+    typical_parts:
+    - C2831365 SLM2012100MIT (0805)
+    sources:
+    - https://so.szlcsc.com/global.html?k=10uH%20电感
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  xr:
+    name: XR(祥如)
+    aka:
+    - 祥如
+    - XR
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。电感。
+    observed:
+      records: 1
+      keywords:
+      - 10uH 电感
+      min_price_cny: 0.6362
+    typical_parts:
+    - C39846661 XRTC322512S100MBCA (1210)
+    sources:
+    - https://so.szlcsc.com/global.html?k=10uH%20电感
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  fauku:
+    name: FAUKU(高芯电子)
+    aka:
+    - 高芯
+    - FAUKU
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。电感。
+    observed:
+      records: 1
+      keywords:
+      - 10uH 电感
+      min_price_cny: 0.2539
+    typical_parts:
+    - C52196444 GXNR4018S100MT (SMD,4x4mm)
+    sources:
+    - https://so.szlcsc.com/global.html?k=10uH%20电感
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  shou-han:
+    name: SHOU HAN(首韩)
+    aka:
+    - 首韩
+    - SHOU HAN
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。连接器/电感，Type-C 16P 报 ¥1.0911。
+    observed:
+      records: 9
+      keywords:
+      - 10uH 电感
+      - Type-C 16P 母座
+      min_price_cny: 1.012
+    typical_parts:
+    - C5189958 CYA0630-10UH (SMD,7.2x6.6mm)
+    - C56359771 TYPE-C 16PIN G4.1 (SMD)
+    - C56359772 TYPE-C 16PIN G4.7 (SMD)
+    - C56359773 TYPE-C 16PIN G4.7-L8 (SMD)
+    sources:
+    - https://so.szlcsc.com/global.html?k=10uH%20电感
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  lx:
+    name: LX(连欣科技)
+    aka:
+    - 连欣
+    - LX
+    - 连欣科技
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。Type-C 连接器，报 ¥0.5506 为同品类最低档。
+    observed:
+      records: 11
+      keywords:
+      - Type-C 16P 母座
+      min_price_cny: 0.5506
+    typical_parts:
+    - C7527689 XUBF-0336-0965 (SMD)
+    - C7527691 XDBF-0316-2027 (SMD)
+    - C7527699 XUBF-0336-8137 (插件)
+    - C7527700 XUBF-0316-FS458 (SMD)
+    sources:
+    - https://so.szlcsc.com/global.html?k=Type-C%2016P%20母座
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  g-switch:
+    name: G-Switch(品赞)
+    aka:
+    - 品赞
+    - G-Switch
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。USB 连接器，GT-USB 系列。
+    observed:
+      records: 5
+      keywords:
+      - Type-C 16P 母座
+      min_price_cny: 2.9
+    typical_parts:
+    - C2843970 GT-USB-7051A (SMD)
+    - C46962005 GT-USB-9069B (插件)
+    - C46962006 GT-USB-9070B (SMD)
+    - C46962003 GT-USB-9055BA (SMD)
+    sources:
+    - https://so.szlcsc.com/global.html?k=Type-C%2016P%20母座
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  jbl:
+    name: JBL(金比莱)
+    aka:
+    - 金比莱
+    - JBL 连接器
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。Type-C 连接器；**缩写与音响品牌 JBL 重名**，别混。
+    observed:
+      records: 4
+      keywords:
+      - Type-C 16P 母座
+      min_price_cny: 1.1579
+    typical_parts:
+    - C53055939 JBL-1043113582 (SMD)
+    - C52711389 JBL-104312272-E (SMD)
+    - C52711387 JBL-1043111462-H (SMD)
+    - C52711388 JBL-1043111472-H (SMD)
+    sources:
+    - https://so.szlcsc.com/global.html?k=Type-C%2016P%20母座
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  chuangyue:
+    name: CHUANGYUE(创粤)
+    aka:
+    - 创粤
+    - Chuangyue
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。Type-C 连接器，价格偏高。
+    observed:
+      records: 2
+      keywords:
+      - Type-C 16P 母座
+      min_price_cny: 3.62
+    typical_parts:
+    - C55629567 TYPE-C-16P-CH9.5L8.5-34022 (SMD)
+    - C55629568 TYPE-C-16P-CH7.55L8-51001 (插件)
+    sources:
+    - https://so.szlcsc.com/global.html?k=Type-C%2016P%20母座
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  zhouri:
+    name: ZHOURI(洲日)
+    aka:
+    - 洲日
+    - Zhouri
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。排针排母。
+    observed:
+      records: 2
+      keywords:
+      - 2.54 排针 40P
+      min_price_cny: 1.2513
+    typical_parts:
+    - C5224014 PZ2.54-2*20 (插件,P=2.54mm)
+    - C2977586 2.54-1*40 (插件,P=2.54mm)
+    sources:
+    - https://so.szlcsc.com/global.html?k=2.54%20排针%2040P
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  yxcon:
+    name: Yxcon(宇熙精密)
+    aka:
+    - 宇熙
+    - Yxcon
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。排针，价格高。
+    observed:
+      records: 1
+      keywords:
+      - 2.54 排针 40P
+      min_price_cny: 1.3739
+    typical_parts:
+    - C19190512 P125-1220A0BS116A1 (插件,P=2.54mm)
+    sources:
+    - https://so.szlcsc.com/global.html?k=2.54%20排针%2040P
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  hanelectricity:
+    name: HanElectricity(瀚源)
+    aka:
+    - 瀚源
+    - HanElectricity
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。排针。
+    observed:
+      records: 1
+      keywords:
+      - 2.54 排针 40P
+      min_price_cny: 0.8429
+    typical_parts:
+    - C25503140 2541WV-2x20P (插件,P=2.54mm)
+    sources:
+    - https://so.szlcsc.com/global.html?k=2.54%20排针%2040P
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  xfcn:
+    name: XFCN(兴飞)
+    aka:
+    - 兴飞
+    - XFCN
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。排针/连接器，PZ 系列。
+    observed:
+      records: 4
+      keywords:
+      - 2.54 排针 40P
+      min_price_cny: 1.3934
+    typical_parts:
+    - C2895846 PZ254V-11-40P (插件,P=2.54mm)
+    - C22465944 PZ254V-12-40P (插件,P=2.54mm)
+    - C510960 MH254V-11-40-1196 (插件,P=2.54mm)
+    - C42419932 PZ254R-11-40P-A40 (弯插,P=2.54mm)
+    sources:
+    - https://so.szlcsc.com/global.html?k=2.54%20排针%2040P
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  ckmtw:
+    name: Ckmtw(灿科盟)
+    aka:
+    - 灿科盟
+    - Ckmtw
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。排针，价格偏高。
+    observed:
+      records: 4
+      keywords:
+      - 2.54 排针 40P
+      min_price_cny: 1.7257
+    typical_parts:
+    - C124369 B-2100R40P-B110 (弯插,P=2.54mm)
+    - C124383 B-2100S40P-B110 (插件,P=2.54mm)
+    - C124377 B-2100S40P-A110 (插件,P=2.54mm)
+    - C115246 S108500002 (弯插,P=2.54mm)
+    sources:
+    - https://so.szlcsc.com/global.html?k=2.54%20排针%2040P
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  lailan:
+    name: LAILAN(莱联)
+    aka:
+    - 莱联
+    - Lailan
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。排针，价格最高档（¥2.26）。
+    observed:
+      records: 3
+      keywords:
+      - 2.54 排针 40P
+      min_price_cny: 2.2578
+    typical_parts:
+    - C54950610 LAIL-PZ2.54-40P-L (插件,P=2.54mm)
+    - C54950600 LAIL-PZ2.54-40P-W (插件,P=2.54mm)
+    - C55786823 LAIL-PZ2.54-20PX2-L (插件,P=2.54mm)
+    sources:
+    - https://so.szlcsc.com/global.html?k=2.54%20排针%2040P
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  jiln:
+    name: JILN(锦凌)
+    aka:
+    - 锦凌
+    - JILN
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。排针。
+    observed:
+      records: 3
+      keywords:
+      - 2.54 排针 40P
+      min_price_cny: 1.1046
+    typical_parts:
+    - C429959 12251140CNG0S115001 (插件,P=2.54mm)
+    - C429965 12251220ANG0S115001 (插件,P=2.54mm)
+    - C429956 12251140CNG0R138006 (弯插,P=2.54mm)
+    sources:
+    - https://so.szlcsc.com/global.html?k=2.54%20排针%2040P
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  hanbo:
+    name: HANBO(汉博)
+    aka:
+    - 汉博
+    - Hanbo
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。排针/连接器。
+    observed:
+      records: 1
+      keywords:
+      - 2.54 排针 40P
+      min_price_cny: 1.8563
+    typical_parts:
+    - C6332245 HB-PH9-254220PB2GOP (SMD,P=2.54mm)
+    sources:
+    - https://so.szlcsc.com/global.html?k=2.54%20排针%2040P
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  hctl:
+    name: HCTL(华灿天禄)
+    aka:
+    - 华灿天禄
+    - HCTL
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。排针。
+    observed:
+      records: 3
+      keywords:
+      - 2.54 排针 40P
+      min_price_cny: 2.07
+    typical_parts:
+    - C2895000 PZ254-2-20-W-8.5 (弯插,P=2.54mm)
+    - C3012260 PZ254-2-20-Z-8.5 (插件,P=2.54mm)
+    - C18198034 PZ254-2-20-W-2.5-G1 (弯插,P=2.54mm)
+    sources:
+    - https://so.szlcsc.com/global.html?k=2.54%20排针%2040P
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  xkb-connection:
+    name: XKB Connection(中国星坤)
+    aka:
+    - 星坤
+    - XKB
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。连接器，价格高（¥6.67）。
+    observed:
+      records: 1
+      keywords:
+      - 2.54 排针 40P
+      min_price_cny: 6.67
+    typical_parts:
+    - C725892 X6521WV-2x20H-C60D30 (插件,P=2.54mm)
+    sources:
+    - https://so.szlcsc.com/global.html?k=2.54%20排针%2040P
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  hanxia:
+    name: hanxia(韩下)
+    aka:
+    - 韩下
+    - hanxia
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。排针。
+    observed:
+      records: 1
+      keywords:
+      - 2.54 排针 40P
+      min_price_cny: 2.0259
+    typical_parts:
+    - C42372528 HX PZ2.54-2x20P ZZ (插件,P=2.54mm)
+    sources:
+    - https://so.szlcsc.com/global.html?k=2.54%20排针%2040P
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  hc:
+    name: HC(虹成电子)
+    aka:
+    - 虹成
+    - HC 虹成
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。排针。
+    observed:
+      records: 3
+      keywords:
+      - 2.54 排针 40P
+      min_price_cny: 1.3508
+    typical_parts:
+    - C22373836 HC-PZ254-11.5L-1x40PZ (插件,P=2.54mm)
+    - C41376111 HC-PZ254-11.5L-2x20PZ (插件,P=2.54mm)
+    - C42163077 HC-PZ254-13.8L-2x20PWA (弯插,P=2.54mm)
+    sources:
+    - https://so.szlcsc.com/global.html?k=2.54%20排针%2040P
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  hci:
+    name: HCI(杭晶)
+    aka:
+    - 杭晶
+    - HCI
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。晶振。
+    observed:
+      records: 1
+      keywords:
+      - 16MHz 贴片晶振
+      min_price_cny: 0.5047
+    typical_parts:
+    - C2842190 XC32M4-16.000-F20NLDT (SMD3225-4P)
+    sources:
+    - https://so.szlcsc.com/global.html?k=16MHz%20贴片晶振
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  yjx:
+    name: YJX(雅晶鑫)
+    aka:
+    - 雅晶鑫
+    - YJX
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 国产二线。晶振。
+    observed:
+      records: 4
+      keywords:
+      - 16MHz 贴片晶振
+      min_price_cny: 0.4965
+    typical_parts:
+    - C133336 TAXM16M4RFBCCT2T (SMD3225-4P)
+    - C164049 TAXM16M4RLBCCT2T (SMD3225-4P)
+    - C133335 TAXM16M4RCBCCT2T (SMD3225-4P)
+    - C164044 TAXM16M4RDBCCT2T (SMD3225-4P)
+    sources:
+    - https://so.szlcsc.com/global.html?k=16MHz%20贴片晶振
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  kuu:
+    name: KUU
+    aka:
+    - KUU
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 无中文名/无官网的国产小牌。1N4148W 报 ¥0.0557，比同档贵；来源不明，量产不建议。
+    observed:
+      records: 1
+      keywords:
+      - 1N4148W
+      min_price_cny: 0.0557
+    typical_parts:
+    - C7603179 1N4148W (SOD-123)
+    sources:
+    - https://so.szlcsc.com/global.html?k=1N4148W
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  eic:
+    name: EIC
+    aka:
+    - EIC
+    tier: domestic_second
+    type: second_source
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 无中文名小牌。S8050 报 ¥0.1136，价格高且资料少。
+    observed:
+      records: 1
+      keywords:
+      - S8050
+      min_price_cny: 0.1136
+    typical_parts:
+    - C3014350 S8050(0.5A) (SOT-23)
+    sources:
+    - https://so.szlcsc.com/global.html?k=S8050
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  utc:
+    name: UTC(友顺)
+    aka:
+    - 友顺
+    - 友顺科技
+    - UTC
+    tier: domestic_second
+    type: second_source
+    country: TW
+    evidence: measured
+    confidence: medium
+    risk_note: 台系二线（自有品牌，非原厂型号原始厂牌）。LM358/NE555 兼容件，参数标注较全，价格约 ¥0.42。
+    observed:
+      records: 2
+      keywords:
+      - LM358
+      - NE555
+      min_price_cny: 0.4247
+    typical_parts:
+    - C71101 LM358G-S08-R (SOIC-8)
+    - C75529 NE555G-S08-R (SOIC-8)
+    sources:
+    - https://so.szlcsc.com/global.html?k=LM358
+    tier_basis: 二级来源/替代品牌：自有型号体系，价格约为原厂 1/3；关键参数需抽测（判据见 references/vendors.md 第 4 节）
+  jsmsemi:
+    name: JSMSEMI(杰盛微)
+    aka:
+    - 杰盛微
+    - JSM
+    - 杰盛微电子
+    tier: trader
+    type: trader
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: '**贸易商/贴牌**典型：同一品牌横跨 10 个不相关品类（二极管、三极管、MOS、LDO、运放、光耦、555、TL431、TVS、ESD），型号命名跟随原厂。价格最低档（S8050 ¥0.0426）。打样可用，量产需确认原厂授权与批次一致性。'
+    observed:
+      records: 17
+      keywords:
+      - 1N4148W
+      - AMS1117-3.3
+      - AO3400
+      - LM358
+      - NE555
+      - PC817
+      - S8050
+      - SS34
+      - SS8050
+      - TL431
+      min_price_cny: 0.0426
+    typical_parts:
+    - C917030 1N4148W (SOD-123)
+    - C5205141 AMS1117-3.3V (SOT-223)
+    - C917183 AMS1117-3.3 (SOT-223-3)
+    - C18190088 AMS1117-3.3V-JSM (SOT-89)
+    sources:
+    - https://so.szlcsc.com/global.html?k=1N4148W
+    tier_basis: 本次实测横跨 10 个不相关品类、同型号价格档位最低（机械判据，见 references/vendors.md 4.1）
+  goodwork:
+    name: GOODWORK(固得沃克)
+    aka:
+    - 固得沃克
+    - Goodwork
+    tier: trader
+    type: trader
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: '**贸易商/贴牌**典型：横跨 9 个不相关品类，同型号有多个 C 号。价格中低档。'
+    observed:
+      records: 17
+      keywords:
+      - 1N4148W
+      - AMS1117-3.3
+      - AO3400
+      - NE555
+      - PC817
+      - S8050
+      - SS34
+      - SS8050
+      - TL431
+      min_price_cny: 0.0457
+    typical_parts:
+    - C909967 1N4148W (SOD-123)
+    - C2908120 1N4148WL (SOD-123FL)
+    - C6067465 AMS1117-3.3 (SOT-89)
+    - C6068481 AMS1117-3.3 (SOT-223)
+    sources:
+    - https://so.szlcsc.com/global.html?k=1N4148W
+    tier_basis: 本次实测横跨 9 个不相关品类、同型号价格档位最低（机械判据，见 references/vendors.md 4.1）
+  rpluso:
+    name: R+O(宏嘉诚)
+    aka:
+    - 宏嘉诚
+    - R+O
+    tier: trader
+    type: trader
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: '**贸易商/贴牌**典型：横跨 7 个品类（二极管/MOS/LDO/运放/555/TL431/电解），SS34 报 ¥0.2166 但同型号 onsemi 报 ¥3.1。价格不总是最低，别默认它便宜。'
+    observed:
+      records: 21
+      keywords:
+      - 1N4148W
+      - LM2596
+      - LM358
+      - S8050
+      - SS34
+      - SS8050
+      - TL431
+      min_price_cny: 0.0425
+    typical_parts:
+    - C7420318 1N4148W (SOD-123)
+    - C54951960 LM2596HC5-ADJ (TO-263-5)
+    - C54951959 LM2596HC5-5.0 (TO-263-5)
+    - C55111448 LM2596HC5-12 (TO-263-5)
+    sources:
+    - https://so.szlcsc.com/global.html?k=1N4148W
+    tier_basis: 本次实测横跨 7 个不相关品类、同型号价格档位最低（机械判据，见 references/vendors.md 4.1）
+  fosan:
+    name: FOSAN(富捷/富信)
+    aka:
+    - 富捷
+    - 富信
+    - FOSAN
+    tier: trader
+    type: trader
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: '**贸易商/贴牌**：与 FOJAN(富捷) 中文名重名但英文名不同，同型号报最低价（S8050 ¥0.0393、1N4148W ¥0.0392）。名称混淆风险高，采购单必须写清英文名。'
+    observed:
+      records: 9
+      keywords:
+      - 100uF 25V 铝电解
+      - 1N4148W
+      - AMS1117-3.3
+      - AO3400
+      - S8050
+      - SS34
+      - SS8050
+      - TL431
+      min_price_cny: 0.0392
+    typical_parts:
+    - C7469933 FVM025ADA101M0654 (6.3x5.4)
+    - C5381435 1N4148W (SOD-123)
+    - C20628883 AMS1117-3.3 (SOT-89-3L)
+    - C20628874 AO3400 (SOT-23)
+    sources:
+    - https://so.szlcsc.com/global.html?k=100uF%2025V%20铝电解
+    tier_basis: 本次实测横跨 8 个不相关品类、同型号价格档位最低（机械判据，见 references/vendors.md 4.1）
+  国芯佳品:
+    name: 国芯佳品
+    aka:
+    - 国芯佳品
+    tier: trader
+    type: trader
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: '**无品牌/贸易商**：无英文名、无官网，仅出现在 AMS1117-3.3（¥0.2308，同品类最低）。典型「换个丝印卖」的散货，量产禁用。'
+    observed:
+      records: 1
+      keywords:
+      - AMS1117-3.3
+      min_price_cny: 0.2308
+    typical_parts:
+    - C2992570 AMS1117-3.3 (SOT-223-3)
+    sources:
+    - https://so.szlcsc.com/global.html?k=AMS1117-3.3
+    tier_basis: 本次实测横跨 1 个不相关品类、同型号价格档位最低（机械判据，见 references/vendors.md 4.1）
+  ytl:
+    name: YTL(亚特联)
+    aka:
+    - 亚特联
+    - YTL
+    tier: trader
+    type: trader
+    country: CN
+    evidence: measured
+    confidence: medium
+    risk_note: 贸易商。搜 STM32F103C8T6 命中 YT37 报价 ¥146.4（明显是模块/错误挂载），不属芯片本体，检索时须剔除。
+    observed:
+      records: 1
+      keywords:
+      - STM32F103C8T6
+      min_price_cny: 146.4
+    typical_parts:
+    - C5441437 YT37 (-)
+    sources:
+    - https://so.szlcsc.com/global.html?k=STM32F103C8T6
+    tier_basis: 本次实测横跨 1 个不相关品类、同型号价格档位最低（机械判据，见 references/vendors.md 4.1）
+  st-x:
+    name: ST(先科)
+    aka: []
+    tier: unknown
+    type: unclassified
+    country: '?'
+    evidence: experience
+    confidence: low
+    risk_note: 未分类：本次采集仅命中少量记录，资料不足以判定原厂/贸易商。量产前必须人工核实官网与授权。
+    observed:
+      records: 2
+      keywords:
+      - 100uF 25V 铝电解
+      - 1N4148W
+      min_price_cny: 0.0754
+    typical_parts:
+    - C129418 CK1E101M-CRE77 (SMD,D6.3xL7.7mm)
+    - C81598 1N4148W (SOD-123)
+    sources:
+    - https://so.szlcsc.com/global.html?k=100uF%2025V%20铝电解
+    tier_basis: 本次采集资料不足，未判定；量产前必须人工核实官网与授权
+  sunway:
+    name: Sunway(信维通信)
+    aka: []
+    tier: unknown
+    type: unclassified
+    country: '?'
+    evidence: experience
+    confidence: low
+    risk_note: 未分类：本次采集仅命中少量记录，资料不足以判定原厂/贸易商。量产前必须人工核实官网与授权。
+    observed:
+      records: 1
+      keywords:
+      - 10k 0603 1%
+      min_price_cny: 0.009
+    typical_parts:
+    - C3152123 SC0603F1002F2BNRH (0603)
+    sources:
+    - https://so.szlcsc.com/global.html?k=10k%200603%201%
+    tier_basis: 本次采集资料不足，未判定；量产前必须人工核实官网与授权
+  hkr:
+    name: HKR(香港电阻)
+    aka: []
+    tier: unknown
+    type: unclassified
+    country: '?'
+    evidence: experience
+    confidence: low
+    risk_note: 未分类：本次采集仅命中少量记录，资料不足以判定原厂/贸易商。量产前必须人工核实官网与授权。
+    observed:
+      records: 1
+      keywords:
+      - 10k 0603 1%
+      min_price_cny: 0.0301
+    typical_parts:
+    - C49330116 AST0310KF (0603)
+    sources:
+    - https://so.szlcsc.com/global.html?k=10k%200603%201%
+    tier_basis: 本次采集资料不足，未判定；量产前必须人工核实官网与授权
+  sae:
+    name: SAE(世盟/世爱)
+    aka: []
+    tier: unknown
+    type: unclassified
+    country: '?'
+    evidence: experience
+    confidence: low
+    risk_note: 未分类：本次采集仅命中少量记录，资料不足以判定原厂/贸易商。量产前必须人工核实官网与授权。
+    observed:
+      records: 1
+      keywords:
+      - 10k 0603 1%
+      min_price_cny: 0.0124
+    typical_parts:
+    - C53224186 1RC0603F1002 (0603)
+    sources:
+    - https://so.szlcsc.com/global.html?k=10k%200603%201%
+    tier_basis: 本次采集资料不足，未判定；量产前必须人工核实官网与授权
+  sie:
+    name: SIE(永星科技)
+    aka: []
+    tier: unknown
+    type: unclassified
+    country: '?'
+    evidence: experience
+    confidence: low
+    risk_note: 未分类：本次采集仅命中少量记录，资料不足以判定原厂/贸易商。量产前必须人工核实官网与授权。
+    observed:
+      records: 1
+      keywords:
+      - 10k 0603 1%
+      min_price_cny: 0.0663
+    typical_parts:
+    - C54973938 CRF0603Q103FN (0603)
+    sources:
+    - https://so.szlcsc.com/global.html?k=10k%200603%201%
+    tier_basis: 本次采集资料不足，未判定；量产前必须人工核实官网与授权
+  liz:
+    name: LIZ(丽智电子)
+    aka: []
+    tier: unknown
+    type: unclassified
+    country: '?'
+    evidence: experience
+    confidence: low
+    risk_note: 未分类：本次采集仅命中少量记录，资料不足以判定原厂/贸易商。量产前必须人工核实官网与授权。
+    observed:
+      records: 1
+      keywords:
+      - 10k 0603 1%
+      min_price_cny: 0.0592
+    typical_parts:
+    - C126901 CR0603FA1002G (0603)
+    sources:
+    - https://so.szlcsc.com/global.html?k=10k%200603%201%
+    tier_basis: 本次采集资料不足，未判定；量产前必须人工核实官网与授权
+  xblw:
+    name: XBLW(芯伯乐)
+    aka: []
+    tier: unknown
+    type: unclassified
+    country: '?'
+    evidence: experience
+    confidence: low
+    risk_note: 未分类：本次采集仅命中少量记录，资料不足以判定原厂/贸易商。量产前必须人工核实官网与授权。
+    observed:
+      records: 7
+      keywords:
+      - AMS1117-3.3
+      - AO3400
+      - LM2596
+      - LM358
+      - NE555
+      min_price_cny: 0.2321
+    typical_parts:
+    - C18906017 AMS1117-3.3(XBLW) (SOT-223)
+    - C18723569 AMS1117-3.3(XBLW) SOT-89 (SOT-89)
+    - C22451422 AO3400(XBLW) (SOT-23-3L)
+    - C41361400 LM2596S-ADJ(XBLW) (TO-263-5L)
+    sources:
+    - https://so.szlcsc.com/global.html?k=AMS1117-3.3
+    tier_basis: 本次采集资料不足，未判定；量产前必须人工核实官网与授权
+  idchip:
+    name: IDCHIP(英锐芯)
+    aka: []
+    tier: unknown
+    type: unclassified
+    country: '?'
+    evidence: experience
+    confidence: low
+    risk_note: 未分类：本次采集仅命中少量记录，资料不足以判定原厂/贸易商。量产前必须人工核实官网与授权。
+    observed:
+      records: 2
+      keywords:
+      - LM358
+      - NE555
+      min_price_cny: 0.2799
+    typical_parts:
+    - C2683482 LM358D (SOP-8)
+    - C5125085 NE555 (SOP-8)
+    sources:
+    - https://so.szlcsc.com/global.html?k=LM358
+    tier_basis: 本次采集资料不足，未判定；量产前必须人工核实官网与授权
+  gcore:
+    name: Gcore(扬州国芯)
+    aka: []
+    tier: unknown
+    type: unclassified
+    country: '?'
+    evidence: experience
+    confidence: low
+    risk_note: 未分类：本次采集仅命中少量记录，资料不足以判定原厂/贸易商。量产前必须人工核实官网与授权。
+    observed:
+      records: 1
+      keywords:
+      - NE555
+      min_price_cny: 0.7481
+    typical_parts:
+    - C5157852 NE555 (DIP-8)
+    sources:
+    - https://so.szlcsc.com/global.html?k=NE555
+    tier_basis: 本次采集资料不足，未判定；量产前必须人工核实官网与授权
+  zhengxin:
+    name: Zhengxin(正芯)
+    aka: []
+    tier: unknown
+    type: unclassified
+    country: '?'
+    evidence: experience
+    confidence: low
+    risk_note: 未分类：本次采集仅命中少量记录，资料不足以判定原厂/贸易商。量产前必须人工核实官网与授权。
+    observed:
+      records: 1
+      keywords:
+      - SS34
+      min_price_cny: 0.1356
+    typical_parts:
+    - C51898099 SS34 (SMA)
+    sources:
+    - https://so.szlcsc.com/global.html?k=SS34
+    tier_basis: 本次采集资料不足，未判定；量产前必须人工核实官网与授权
+  立创开发板:
+    name: 立创开发板
+    aka:
+    - 立创开发板
+    - LCKFB
+    tier: unknown
+    type: unclassified
+    country: CN
+    evidence: experience
+    confidence: low
+    risk_note: 平台自营开发板品牌，非元器件原厂。选型时须确认板上的芯片本体品牌，不可作芯片料号使用。
+    observed:
+      records: 1
+      keywords:
+      - STM32F103C8T6
+      min_price_cny: 11.46
+    typical_parts:
+    - C22396880 LCKFB-DKX-STM32F103C8T6 (-)
+    sources:
+    - https://so.szlcsc.com/global.html?k=STM32F103C8T6
+    tier_basis: 本次采集资料不足，未判定；量产前必须人工核实官网与授权
+  oshwhub:
+    name: OSHWHub(立创开源硬件平台)
+    aka:
+    - 立创开源
+    - OSHWHub
+    tier: unknown
+    type: unclassified
+    country: CN
+    evidence: experience
+    confidence: low
+    risk_note: 开源硬件平台挂载品，非元器件品牌。仅指代开源工程/模块，不可作芯片料号使用。
+    observed:
+      records: 1
+      keywords:
+      - STM32F103C8T6
+      min_price_cny: 8.2
+    typical_parts:
+    - C5259974 OSHWHUB-2.4GModule (-)
+    sources:
+    - https://so.szlcsc.com/global.html?k=STM32F103C8T6
+    tier_basis: 本次采集资料不足，未判定；量产前必须人工核实官网与授权

@@ -1,0 +1,338 @@
+# =============================================================================
+# 配单工作流 —— D0-D9 决策链的机读版
+#
+# 用途：agent 按 steps 顺序执行，每步的 commands 可直接跑，criteria 决定是否
+#       进入下一步，stop_conditions 命中就抛回用户（不要自己编）。
+# 人读版：references/methodology.md §1 - §12
+#
+# 与其它知识库的关系：
+#   channels.yaml        → D5 渠道选择
+#   risk-checklist.yaml  → D6 风险复核 & gates
+#   industry-norms.yaml  → D4 降额 & D5 损耗
+#   spec-rules.yaml      → D2 参数集 & D4 指标判据
+# =============================================================================
+
+schema: bom-sourcing/knowledge/workflow
+version: 1
+generated: '2026-11-05'
+locale: zh-CN
+
+purpose: >-
+  把「拿到需求 → 给出可下单的报价单」拆成 10 个不可跳过的步骤。
+  每一步的输入是上一步的输出，缺一步整条链就断了。
+
+principles:
+  - id: P1
+    name: 刚好够用是目标函数
+    detail: 选满足需求的最便宜那个，不是性能最好那个。但降额 / 安规 / 认证 / 定时基准不可糙化。
+    boundary: risk-checklist.yaml 里 severity=blocker 的条目
+  - id: P2
+    name: 绝对最大值不等于安全工作值
+    detail: 任何参数都必须带测试条件比较，不能只比数字。
+  - id: P3
+    name: 可解释优于准确
+    detail: 每行判定必须能说清查了什么、没查什么、为什么存疑。宁可给 ? 不给错的 ✔。
+
+# -----------------------------------------------------------------------------
+# 一、入口路由
+# -----------------------------------------------------------------------------
+entry_routing:
+  evidence: experience
+  routes:
+    - id: A
+      name: 一句话需求
+      pattern_examples:
+        - 3.3V 1A 的 LDO
+        - 30V 5A 的 N 沟道 MOS
+        - 10uF 25V 0805 电容
+      steps: [D0, D1, D2, D3, D4, D5, D6, D7, D8, D9]
+      first_command: 'python scripts/pick.py cats'
+      precondition: 必须能抽出至少一个定量参数（电压/电流/容值/阻值/频率/封装之一）
+      fallback: 抽不出 → route D
+    - id: B
+      name: BOM 表
+      pattern_examples:
+        - CSV / Excel
+        - 粘贴的表格（含位号、型号、封装、数量）
+      steps: [D0, D4, D5, D6, D7, D8, D9]
+      first_command: 'python scripts/bom.py <bom> --columns'
+      precondition: 必须有序号列 + 型号列 + 数量列
+      fallback: 缺型号但有参数 → 逐行降级成 route A
+    - id: C
+      name: 型号直查
+      pattern_examples:
+        - C8734 多少钱
+        - STM32F103C8T6 有没有货
+      steps: [D0, D4, D5, D8]
+      first_command: 'python scripts/lcsc.py detail <code>'
+      precondition: 型号必须是可检索的完整型号，不是系列名
+      fallback: 系列名 → route A
+    - id: D
+      name: 都不是
+      pattern_examples:
+        - 帮我看看这个电路行不行
+        - 这个料还能买吗
+      steps: []
+      action: 停下来问人
+
+# -----------------------------------------------------------------------------
+# 二、步骤链
+# -----------------------------------------------------------------------------
+steps:
+
+  - id: D0
+    name: 入口分类与表格体检
+    goal: 判断用户给的是哪一类输入；若是 BOM 表，先确认可解析
+    inputs: [用户原始输入]
+    commands:
+      - 'python scripts/bom.py <bom> --columns'
+    criteria:
+      - 命中 entry_routing.routes 里的某一条（A / B / C / D）
+      - 走 route B 时：序号列 / 型号列 / 数量列 均可识别
+      - 走 route B 时：位号集合与坐标文件差集为空（若提供坐标文件）
+      - 走 route B 时：位号无重复
+    stop_conditions:
+      - 命中 route D（既不是一句话需求、也不是 BOM 表、也不是型号直查）
+      - 型号列缺失且无法从其它列推出
+      - 数量列缺失
+    common_mistakes:
+      - 列名嗅探失败就直接报错，应该让用户指定列
+      - 把 A 类当 C 类硬查（检索不到就误报「无货」）
+      - 把 B 类当 A 类逐行问（用户被问 20 遍）
+    outputs: [route 标识, 可解析的行列表（route B）]
+
+  - id: D1
+    name: 需求澄清
+    goal: 把模糊描述补成可检索的参数集
+    inputs: [一句话需求]
+    commands:
+      - 'python scripts/pick.py cats'
+      - 'python scripts/pick.py resolve "<需求原文>"'
+    criteria:
+      - resolve 返回 1 个 family → 继续
+      - 返回多个 family → 用最具体的那个，并注明「也可能属于 X」
+      - 0 个 family → 停（G02）
+    stop_conditions:
+      - 抽不出任何定量参数（G01）
+      - family 未收录且不确定（G02）
+    common_mistakes:
+      - 不跑 resolve 直接搜 → 用错 family 的参数表核对
+      - 缺参数时自己假设
+      - 把 LDO 和 DCDC 混为一谈
+    outputs: [family, 已确认参数]
+
+  - id: D2
+    name: 品类与参数确定
+    goal: family → 必填参数集，明确关键项与条件项
+    inputs: [family, 已确认参数]
+    commands:
+      - 'Get-Content skills\bom-sourcing\data\spec-rules.yaml | Select-String -Pattern "^\s{2}<family>:"'
+    criteria:
+      - family.required_to_specify 全部有值
+      - family.critical[].key 全部有值
+      - 被触发的 conditional_critical 也有值
+    stop_conditions:
+      - conditional_critical 被触发但缺值（G03）
+    conditional_triggers:
+      - when: 分压 / 基准 / 滤波网络
+        tighten: 电阻 tempco <= 100ppm/摄氏度；tolerance <= 0.5%
+      - when: 电源轨上的 Class II MLCC
+        tighten: 额定电压 >= 2x 工作电压
+      - when: 高温环境（柜内 60 摄氏度以上）
+        tighten: 全部按最坏工况重算降额
+      - when: 安规 / 隔离 / 保险丝
+        tighten: 不可替代，一律原型号
+    common_mistakes:
+      - 只看 critical 不看 conditional_critical
+      - 用标称容值设计 Class II 电容
+      - 忽略封装
+    outputs: [完整参数集]
+
+  - id: D3
+    name: 候选生成
+    goal: 拿到 5 到 20 个候选
+    inputs: [family, 参数集, 数量]
+    commands:
+      - 'python scripts/pick.py pick "<意图>" --package <pkg> --qty <N> --sort sales --limit 10'
+      - 'python scripts/lcsc.py search "<kw>" --sort price_asc --limit 20 --qty <N> --show-params'
+      - 'python scripts/taobao.py search "<kw>" --site taobao --sort sales --limit 20'
+      - 'python scripts/distributor.py search "<kw>" --site both --limit 5'
+    criteria:
+      - 候选 >= 5 → 继续
+      - 候选 1-4 → 继续，但必须注明「候选稀缺，议价空间小」
+      - 候选 0 → 走 escalation
+    escalation:
+      - 去掉 --package
+      - 加 --include-out-of-stock
+      - 放宽精度 / 耐压
+      - taobao.py 反向找同参数
+      - 报「无货」，不要编造型号
+    stop_conditions:
+      - 接口返 0 但确定有货（先排除 pageSize > 30 的坑，R070）
+    common_mistakes:
+      - 用销量排序当主判据
+      - 0 候选就报停产
+      - 忘记 --qty
+    outputs: [候选清单]
+
+  - id: D4
+    name: 指标核对
+    goal: 逐条比对，出五档判定
+    inputs: [候选清单, 参数集]
+    commands:
+      - 'python scripts/lcsc.py detail <code>'
+      - 'python scripts/lcsc.py compare <code> [code...] --qty <N>'
+      - 'python scripts/spec.py'
+    criteria:
+      - 任一关键项 ✘ → 整行淘汰，回 D3
+      - 任一 ? → 输出必须写清缺什么
+      - 全部 ✔ 或 ≈ → 继续
+      - ! → 需说明理由才能用
+    marks:
+      '✔': 完全匹配
+      '≈': 等效（相对误差 <= 2%）
+      '?': 待确认
+      '!': 警告（非关键项超标 / 降额不足）
+      '✘': 不匹配
+    derating_source: data/knowledge/industry-norms.yaml#derating
+    hidden_stress_source: data/knowledge/industry-norms.yaml#hidden_stress
+    stop_conditions:
+      - 任一关键项 ✘ 且无替代（G04）
+    common_mistakes:
+      - 只降电压不看温度
+      - 用标称容值设计
+      - 拿 25 摄氏度的 Id 当可用电流
+      - 全面过度降额
+      - 把降额当散热方案
+      - 缺货换料后不重跑降额
+    outputs: [带五档判定的候选]
+
+  - id: D5
+    name: 成本与渠道
+    goal: 算出在哪买、买多少、多少钱
+    inputs: [已核对的候选, 数量]
+    commands:
+      - 'python scripts/lcsc.py price <code> --qty <N>'
+      - 'python scripts/bom.py <bom> --qty <N> --pref price --md <out.md> --json <out.json>'
+      - 'python scripts/taobao.py search "<kw>" --site 1688 --sort price_asc --limit 20'
+    criteria:
+      - 渠道按 channels.yaml#channel_selection.rules 顺序匹配
+      - 报价单必须含 5 项（见 quote_requirements）
+      - 必须算损耗（industry-norms.yaml#spares）
+      - 必须算归一化成本（industry-norms.yaml#cost）
+    stop_conditions:
+      - 整单 >= 500 元且需 1688 阶梯价（G10）
+    common_mistakes:
+      - 没算损耗
+      - 忽略换料费
+      - 用 1688 的「1 个起批」价当批发价
+      - 拿淘宝的价比立创的库存（R071）
+    outputs: [报价单草稿, 渠道建议]
+
+  - id: D6
+    name: 风险复核
+    goal: 过一遍风险清单，拦住 blocker
+    inputs: [报价单草稿]
+    commands:
+      - 'python -c "import yaml;d=yaml.safe_load(open(r''skills\bom-sourcing\data\knowledge\risk-checklist.yaml'',encoding=''utf-8''));[print(r[''id''],r[''severity''],r[''name'']) for r in d[''risks'']]"'
+    criteria:
+      - 任一 blocker → 停（G05）
+      - 任一 major → 输出必须列出 + 给规避动作
+      - 全部 minor → 记「已复核」
+    irreplaceable_check: data/knowledge/risk-checklist.yaml#irreplaceable
+    stop_conditions:
+      - 命中 blocker（G05）
+      - 涉及安规 / 认证 / 隔离 / 保险丝的替代（G06）
+      - 涉及定时基准 / 固件绑定器件的替代（G07）
+    outputs: [风险结论]
+
+  - id: D7
+    name: 替代料裁决
+    goal: 有替代就裁决，没有就承认
+    inputs: [缺货 / 停产 / 不可用行]
+    commands:
+      - 'python scripts/lcsc.py alternate <code> --qty <N> --limit 10'
+      - 'python scripts/lcsc.py compare <orig> <alt> --qty <N>'
+      - 'python scripts/bom.py <bom> --qty <N> --alternate --alt-limit 3'
+    criteria:
+      - 替代料必须重跑 D4 完整核对
+      - simScore 只做排序，不做裁决
+      - 风险档按 risk-checklist.yaml#substitute_risk_tiers
+      - 四步验证按 risk-checklist.yaml#substitute_validation
+    stop_conditions:
+      - 涉及不可替代类（G06 / G07）
+    no_substitute_is_valid: >-
+      参数无法匹配时，「建议改设计」是合法结论，必须给成本对比（改板 vs 囤料 vs 换方案）。
+      不要推荐一个勉强能用的。
+    common_mistakes:
+      - 用 simScore 直接替换
+      - 换料后不重跑降额
+      - 硬凑替代品
+    outputs: [替代方案 或 改设计建议]
+
+  - id: D8
+    name: 下单与留痕
+    goal: 出正式报价单 + 落盘原始数据
+    inputs: [已裁决的方案]
+    commands:
+      - 'python scripts/bom.py <bom> --qty <N> --md <报价单>.md --json <报价单>_<时间戳>.json'
+      - 'python scripts/bom.py <bom> --qty <N> --columns'
+    criteria:
+      - 原列结构保留，追加列在最后
+      - 每行可点回原始商品页（https://item.szlcsc.com/<code>.html）
+      - 三色配单：绿=完全匹配 / 黄=待确认 / 红=无法匹配
+      - 原始 JSON 带时间戳落盘
+    quote_requirements:
+      - 立创编号 + 品牌 + 封装 + 实际采购量（含损耗）
+      - 单价、小计、取价时间、数量档
+      - 指标核对结论（五档标记 + 理由）
+      - 渠道建议 + 理由
+      - 风险提示（? / ! 行、停产、合规待确认）
+    input_format_rule: 'IC 直接输入型号；阻容直接输入值，值 + 参数用空格分隔（如 10K 5% / 100PF 10V）'
+    stop_conditions:
+      - 报价单出现红色行（G09）
+      - 用户要求的渠道组合平台不支持（G12）
+    outputs: [报价单.md, 报价单.json]
+
+  - id: D9
+    name: 到货验收
+    goal: 确认货真、批次一致、能上机
+    inputs: [实物]
+    commands: []
+    criteria:
+      - 外观七条法无异常
+      - 同批次日期码一致
+      - 高风险类全检，其余抽检 1 到 2 只
+    stop_conditions:
+      - 外观任一异常 → 停止使用，退货
+    outputs: [验收结论, 归档记录]
+
+# -----------------------------------------------------------------------------
+# 三、停止条件汇总（硬门，任一命中即抛回用户）
+# -----------------------------------------------------------------------------
+gates:
+  source: data/knowledge/risk-checklist.yaml#must_ask_human
+  count: 12
+  ids: [G01, G02, G03, G04, G05, G06, G07, G08, G09, G10, G11, G12]
+  rule: 命中即停止自动化，把问题抛回用户。不要自己编一个数。
+
+# -----------------------------------------------------------------------------
+# 四、缓存与留痕
+# -----------------------------------------------------------------------------
+caching:
+  ttl_hours: 6
+  location: '%LOCALAPPDATA%\bom-sourcing\cache'
+  disable_flag: '--no-cache'
+  reason: 价格是瞬时快照，比价结论只在采集时刻有效
+
+tracing:
+  rule: 原始 JSON 带时间戳落盘；抽取结论只引用落盘数据，不凭记忆
+  timestamp_format: '%Y%m%d_%H%M%S'
+
+sources:
+  - references/methodology.md
+  - research/methodology-survey.md
+  - research/cn-knowledge.md
+  - research/market-probe.md
+  - research/lcsc-probe.md
+  - data/spec-rules.yaml

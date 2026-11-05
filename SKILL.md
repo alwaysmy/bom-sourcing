@@ -50,7 +50,14 @@ python scripts/lcsc.py search "10k 0603 1%" --sort sales_desc --limit 10
 python scripts/lcsc.py price C25804 --qty 100
 python scripts/lcsc.py compare C25804 C98220 --qty 100
 python scripts/lcsc.py alternate C8734 --qty 100           # 找替代（相似度+参数差异+国产替代）
+python scripts/lcsc.py detail C8734 --pdf                   # 数据手册 PDF 直链
+python scripts/lcsc.py detail C8734 --download ./datasheets # 下载手册（存成 C8734.pdf）
 ```
+
+> **要读懂手册内容时，交给 `read-pdf` skill**（本 skill 只负责把手册链接/文件拿到手，不解析 PDF）。
+> 典型链路：`detail --download` 拿 PDF → `read-pdf` 读引脚/时序/降额曲线 → 回到 `spec-check.md` 做指标裁决。
+> 注意：`https://datasheet.lcsc.com/{pdfDESProductId}.pdf` 这条老直链已失效（只回跳转页），
+> 用 `--pdf` 走商品页里的 `atta.szlcsc.com` 签名直链；没上传手册的料会明确报"没有 PDF"。
 
 BOM 支持 `.csv` / `.tsv` / `.xlsx` / 纯文本（一行一个型号，可带 `x2` 数量）。
 Excel 导出时选「CSV UTF-8」，中文列名能自动识别（型号/Comment/Value/MPN、数量/Qty、封装/Footprint、位号/Designator）。
@@ -64,6 +71,8 @@ Excel 导出时选「CSV UTF-8」，中文列名能自动识别（型号/Comment
   ├─ 取候选     catalogIdFilter + 排序（sales / price）+ 翻页，默认 2 页 = 60 条
   ├─ 参数约束   **从候选自带的 paramLinkedMap 动态聚键**，再用别名表把
   │             Vout/Vdss/输出电流/耐压 映射到真实中文键（键随类目变，不硬编码）
+  │             参数键缺失时再试商品名里的数值（很多料只在名字里写 5.5V、1.5A）
+  ├─ 功能闸门   参数满足 ≠ 功能对：商品名里的功能词再判一次（见下节）
   ├─ 过滤排序   全部约束通过 → 缺参数的直接排除（`--allow-unknown` 放行）
   │             → 按销量或价格排序，同型号多 C 号按库存去重
   └─ 可选比价   --taobao N：前 N 个型号再去淘宝/1688 查单只价
@@ -72,9 +81,30 @@ Excel 导出时选「CSV UTF-8」，中文列名能自动识别（型号/Comment
 支持的写法（`--param`）：`输出电压=3.3V`、`输出电流>=1A`、`漏源电压>=30V`、`容值=10uF`、
 `阻值=10k`、`精度<=1%`、`频率=8MHz`、`接口类型=SPI`、`数量=N沟道`；封装用 `--package 0805`。
 无单位数字按品类落到对应物理量（LDO 的 `3.3V` → 输出电压，MOS 的 `30V` → 漏源电压，电容的 `25V` → 耐压）。
+**区间需求**：负载开关这类"工作电压"是区间量，写 `3.3V~21V` 表示候选区间必须覆盖这两头。
 
 **参数区间筛选立创没有服务端接口，只能在客户端做**，所以 `--pages` 越大越全、但请求越多（QPS ≤ 1）。
 输出里的"落选主因"会告诉你哪个约束卡掉最多（例：`3.3V→输出电压=5V ×11`），方便判断是放宽还是换参数。
+
+## 功能符合性（参数满足 ≠ 功能对）
+
+立创的品类归类很粗：`功率电子开关(969)` 里同时挂着**负载开关 / eFuse / 过压保护开关 / 同步降压转换器 /
+理想二极管 ORing**，`productType` 是 catalog 级标签、零区分力。只按「工作电压 + 最大连续电流」筛，
+会把 `MP4316GRE-Z`（45V/6A **同步降压转换器**）当成 5A 负载开关推出去。
+
+所以 `pick.py` 默认在参数通过后再做一次功能闸门，四态：
+
+| 判定 | 依据 | 处理 |
+|---|---|---|
+| `ok` | 商品名命中正向功能词，且无反向词 | 正常输出 |
+| `mismatch` | 只命中反向词（如"降压转换器"） | **直接剔除**，并写进落选主因 |
+| `conflict` | 正反都命中（如"集成TVS的…过压保护开关"） | 保留 + 打警告，人工确认 |
+| `unknown` | 商品名只有型号/纯参数，没功能描述 | 保留 + 提示必须查手册（`--pdf`）或原厂页面 |
+
+关键：**「正向没命中」不等于「功能不符」**——很多料（如 `HS2950P.M`）商品名只有型号。
+这类必须降级到数据手册第一段或原厂/分销商描述（`distributor.py search "<型号>"`）才能定论。
+正向/反向词表在 `data/categories.yaml` 每个 family 的 `function_keywords` / `exclude_keywords`，
+`--no-func` 可关闭该闸门（不建议）。
 
 ## 配单流程（脚本已实现的部分标 ✅）
 
@@ -118,6 +148,7 @@ Excel 导出时选「CSV UTF-8」，中文列名能自动识别（型号/Comment
 | `scripts/spec.py` | 参数解析与指标比对（可单跑自测） | 纯标准库 |
 | `scripts/taobao.py` | 淘宝/1688 检索（销量/价格排序、元/包→元/只归一），走真实浏览器 | Kimi WebBridge daemon |
 | `scripts/distributor.py` | 海外分销商检索：Mouser 中国 / DigiKey 中国（型号、库存、含税人民币价） | Kimi WebBridge daemon（两站都拦纯 HTTP） |
+| `scripts/origin.py` | **原厂官方商城**检索：19 家注册（3PEAK/TI/MPS/士兰微/兆易/圣邦微…），拿原厂价与库存基线 | 纯标准库（TI 取库存需 `--browser`） |
 
 公共约定：价格为**人民币含税单价**并按数量取阶梯；结果带抓取时间；缓存默认 6 小时
 （`%LOCALAPPDATA%\bom-sourcing\cache`，`--no-cache` 关闭）。
@@ -134,19 +165,24 @@ Excel 导出时选「CSV UTF-8」，中文列名能自动识别（型号/Comment
 
 ## 数据与知识
 
-- `references/lcsc-api.md`：立创接口全部实测事实（请求体、sortNumber、facet、替代料接口、反例）
+- `references/lcsc-api.md`：立创接口全部实测事实（请求体、sortNumber、facet、替代料接口、反爬处置、反例）
 - `references/pick-intent.md`：**按意图找料**的实现细节（品类解析、参数别名表、约束语法、采样边界）
 - `references/spec-check.md`：指标核对判据（测试条件、降额表、替代风险分档）与标记释义
 - `references/channels.md`：渠道与采购执行细节
+- `references/methodology.md`：**配单方法论**（D0–D9 十步决策链，每步的输入/动作/判据/常见错误）
+- `references/vendors.md`：**厂商可信度**（tier 分层、维护流程、复核周期、降级条件），机读版 `data/knowledge/vendors.yaml`
 - `data/spec-rules.yaml`：32 个器件 family 的可机读规则（critical/relaxable 参数、默认型号库、风险备注），
   人读版见 `references/research/spec-rules.md`
-- `data/categories.yaml`：品类索引（family → 中文品类名、立创 `catalogId`、真实参数键与取值样例），
-  是 `pick.py` 的品类解析表；人读版见 `references/research/categories.md`
+- `data/categories.yaml`：品类索引（26 个 family → 中文品类名、立创 `catalogId`、真实参数键与取值样例、
+  功能正/反向词），是 `pick.py` 的品类解析表；人读版见 `references/research/categories.md`
+- `data/knowledge/`：`channels.yaml`（渠道选择规则）、`risk-checklist.yaml`（风险硬门）、
+  `industry-norms.yaml`（降额与隐性应力）、`workflow.yaml`（D0–D9 机读版）、`vendors.yaml`（144 品牌 tier）
 - `references/research/`：调研证据链（`BOM-配单-调研报告.md` 总报告、`lcsc-probe.md` 立创接口、
-  `market-probe.md` 淘宝/1688 实测、`github-tools.md` 现成轮子、`cn-knowledge.md` 行业方法论、`spec-rules.md`）
+  `market-probe.md` 淘宝/1688 实测、`taobao-pick.md` 淘宝比价实测、`github-tools.md` 现成轮子、
+  `cn-knowledge.md` 行业方法论、`spec-rules.md`、`categories.md`、`methodology-survey.md`、`vendors.md`）
 - `references/examples/load-switch-3v3-21v-5a.md`：完整选型样例（3.3V 起 / ≥21V / ≥5A 负载开关），
-  含短名单、渠道比价、排除项与风险——照着它写自己的选型结论
-- 探针原始响应（排序/facet/替代料/淘宝详情 JSON，约 18 MB）：`D:\WorkDesigns\3_WorkTools\Bom_Flow\probe\`
+  含短名单、功能符合性核对、渠道比价、排除项与风险——照着它写自己的选型结论
+- 探针原始响应（排序/facet/替代料/淘宝详情/PDF 等 JSON，约 20 MB）：`D:\WorkDesigns\3_WorkTools\Bom_Flow\probe\`
 
 ## 已验证 / 未覆盖（用前先看）
 
@@ -164,6 +200,12 @@ Excel 导出时选「CSV UTF-8」，中文列名能自动识别（型号/Comment
 - 海外分销商：`distributor.py` 读 Mouser 中国 / DigiKey 中国（`--site mouser|digikey|both`），
   返回型号、库存、**含税人民币**阶梯价。两站纯 HTTP 均被拦（DigiKey 403 Akamai、Mouser 403 DataDome），
   必须走真浏览器；实测同一颗 TPS259472ARPWR：立创 ¥3.38@1000 vs Mouser ¥11.38@25 vs DigiKey ¥17.43@1
+- **功能符合性闸门**：`spec.function_check()` + `data/categories.yaml` 的正/反向功能词（25+1 个 family，
+  129 正向词 / 238 反向词）；实测挡掉 `MP4316GRE-Z`（同步降压转换器冒充负载开关），
+  对 `LP5280SHVF`（集成 TVS 的过压保护开关）判 ok、对 `HS2950P.M`（商品名只有型号）判 unknown 并提示查手册
+- **数据手册**：`lcsc.py detail <C> --pdf --download <目录>` 取 `atta.szlcsc.com` 签名直链并下载
+  （旧 `datasheet.lcsc.com/{id}.pdf` 已失效）；没上传手册的料会明确报"没有 PDF"
+- 反爬处置：203/EdgeOne 挑战会被识别成 `AntiBotError` 并给处置建议；`lcsc.py cookie` 可用真实浏览器取 cookie
 
 **未覆盖 / 需人工**
 - 立创**参数区间筛选**：`queryParameterValue`+`lastParamName` 实测返回 0 条，用法未明。
@@ -173,6 +215,8 @@ Excel 导出时选「CSV UTF-8」，中文列名能自动识别（型号/Comment
 - 跨型号替代的最终裁决：`alternate` 给候选 + 参数差异，是否可用仍按 `references/spec-check.md` 的风险档人工确认
 - 立创历史价格曲线、批量议价、交期承诺：接口没有
 - 淘宝/1688 的阶梯价（1688 详情只给价格区间，没有 N–M 件台阶）
+- **原厂官方商城**（TI / MPS / 3PEAK / 圣邦微 等直营店）：索引中，未完成前按"需登录/需人工"处理
+- 立创接口**没有 SLA**：请求过密会被 EdgeOne 拦成 203，只能退避重试或取 cookie
 - 海外站只做**检索比价**：含增值税、无人民币议价、交期按官网；DigiKey 搜索会先落到"品类卡片页"再点进品类
   （`distributor.py` 已自动处理），任意型号不保证命中
 - 下单、支付、订单跟踪：不做
@@ -187,6 +231,14 @@ Excel 导出时选「CSV UTF-8」，中文列名能自动识别（型号/Comment
    尤其是耐压、精度、测试条件。`pick.py` 对"缺该参数"的料默认排除，正是为了不把"没写"当成"满足"。
 4. **筛选写错是静默失败**：多值筛选的分隔符是 `$`（`brandIdFilter: "91$842"`），用逗号会**静默返回 0 条**；
    `pageSize > 30` 同样静默返 0 条而不是报错。`lcsc.py` 已把这些参数包好，自己直接拼 body 时要注意。
+5. **参数满足 ≠ 功能对**：立创 `功率电子开关(969)` 里混着负载开关、eFuse、过压保护开关、
+   **同步降压转换器**。只按参数筛会把 `MP4316GRE-Z`（降压转换器）当 5A 负载开关。`pick.py` 默认开功能闸门；
+   `bom.py`/手工检索时自己用 `spec.function_check()` 核一遍商品名。
 
 另有两个环境坑：`*.lcsc.com` **不能走代理**（`lcsc.py` 已内置绕开）；淘宝结果空白多半是**登录态过期**，
 不是反爬。完整清单见 `references/channels.md` §7。
+
+**反爬（HTTP 203 / EdgeOne 挑战）**：立创会对脚本流量返回 203 + `tws2_` 挑战页，`lcsc.py` 会直接报
+「触发了反爬」并给处置建议，不会抛 `JSONDecodeError`。按代价从低到高：① `--rate 2`（甚至 3）重试、
+等 3~10 分钟；② `python lcsc.py cookie` 用真实浏览器取一次 cookie 存盘（之后自动带上）；
+③ 换网络。**不要短时间高频重试**，只会延长封禁。

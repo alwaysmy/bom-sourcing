@@ -5,6 +5,9 @@ scanned_at: "2026-11-04"
 families:
   resistor:
     label_cn: '贴片电阻'
+    family_key: 'resistor'
+    function_keywords: ['厚膜电阻', '贴片电阻', '合金电阻', '薄膜电阻', '排阻']
+    exclude_keywords: ['压敏电阻', '热敏电阻', 'NTC', 'PTC', '电位器', '铝壳', '瓷管', '分流器', '保险丝', '光敏电阻', '湿敏电阻']
     keywords: ['电阻', '贴片电阻']
     catalog_id: '439'
     parent: '电阻'
@@ -30,6 +33,9 @@ families:
     sample_parts: ['C25804', 'C21190', 'C25744']
   mlcc:
     label_cn: '贴片电容(MLCC)'
+    family_key: 'mlcc'
+    function_keywords: ['贴片电容', 'MLCC', '陶瓷电容', '独石电容']
+    exclude_keywords: ['铝电解', '钽电容', '电解电容', '咪头', '气体放电管', '馈通', '谐振器', '元件盒', '薄膜电容']
     keywords: ['贴片电容', '电容', 'MLCC']
     catalog_id: '313'
     parent: '电容'
@@ -55,6 +61,9 @@ families:
     sample_parts: ['C14663', 'C1525', 'C15849']
   inductor:
     label_cn: '功率电感'
+    family_key: 'inductor'
+    function_keywords: ['功率电感', '贴片电感', '一体成型电感', '色环电感', '插件电感', '绕线电感']
+    exclude_keywords: ['磁珠', '磁环', '磁棒', '共模滤波器', '变压器', '分流器', '接近传感器', '共模电感']
     keywords: ['电感', '功率电感', '贴片电感']
     catalog_id: '544'
     parent: '电感/线圈/变压器'
@@ -88,6 +97,9 @@ families:
     sample_parts: ['C602032', 'C167874', 'C132141']
   bead:
     label_cn: '磁珠'
+    family_key: 'bead'
+    function_keywords: ['磁珠', '铁氧体磁珠', '阻抗', '磁环', '磁棒']
+    exclude_keywords: ['功率电感', '贴片电感', '共模滤波器', 'EMI滤波', '钳位滤波', '变压器']
     keywords: ['磁珠']
     catalog_id: '527'
     parent: '磁珠/滤波器/EMI优化'
@@ -113,6 +125,9 @@ families:
     sample_parts: ['C14709', 'C1002', 'C1017']
   led:
     label_cn: '发光二极管/LED'
+    family_key: 'led'
+    function_keywords: ['发光二极管', 'LED', '片式', '翠绿', '高亮', '红外发射管']
+    exclude_keywords: ['光耦', '稳压二极管', '静电和浪涌保护', 'TVS', 'LED驱动', '隔离柱', '激光二极管', '光电二极管']
     keywords: ['发光二极管', 'LED']
     catalog_id: '528'
     parent: '光电器件'
@@ -146,6 +161,9 @@ families:
     sample_parts: ['C2286', 'C84256', 'C2297']
   diode:
     label_cn: '通用二极管'
+    family_key: 'diode'
+    function_keywords: ['二极管', '整流', '开关二极管', '通用二极管', '检波']
+    exclude_keywords: ['稳压二极管', '发光二极管', '肖特基', 'TVS', '静电和浪涌保护', '碳化硅', '光电二极管', '激光二极管', '雪崩', '光耦', '快恢复']
     keywords: ['二极管', '通用二极管', '开关二极管']
     catalog_id: '370'
     parent: '二极管'
@@ -171,6 +189,9 @@ families:
     sample_parts: ['C95872', 'C64898', 'C727081']
   schottky:
     label_cn: '肖特基二极管'
+    family_key: 'schottky'
+    function_keywords: ['肖特基', '电压:', '电流:']
+    exclude_keywords: ['稳压二极管', '发光二极管', '碳化硅', '通用二极管', '开关二极管', '整流桥', '快恢复', 'TVS', '静电和浪涌保护']
     keywords: ['肖特基二极管', '肖特基']
     catalog_id: '373'
     parent: '二极管'
@@ -196,6 +217,9 @@ families:
     sample_parts: ['C8678', 'C191023', 'C22452']
   tvs:
     label_cn: '静电和浪涌保护(TVS/ESD)'
+    family_key: 'tvs'
+    function_keywords: ['截止', '峰值浪涌电流', '峰值脉冲电流', '双向', '单向', 'TVS', 'ESD']
+    exclude_keywords: ['稳压二极管', '压敏电阻', '半导体放电管', '浪涌保护器/防雷器', '连接器外壳', 'MLCC', '贴片电容', '纽扣', 'POE', '保护开关', '电子保险丝', '负载开关']
     keywords: ['TVS', '瞬态抑制二极管']
     catalog_id: '526'
     parent: '三极管/MOS管/晶体管'
@@ -229,6 +253,9 @@ families:
     sample_parts: ['C7519', 'C7420375', 'C32677']
   esd:
     label_cn: '静电和浪涌保护(TVS/ESD)'
+    family_key: 'esd'
+    function_keywords: ['静电', 'ESD', '峰值脉冲电流', '防护器件', '截止']
+    exclude_keywords: ['稳压二极管', '运算放大器', 'RS-485', 'RS422', 'RS232', 'CAN收发器', '比较器', '排母', '数字隔离器', '音频功率放大器']
     keywords: ['ESD', '静电保护']
     catalog_id: '526'
     parent: '三极管/MOS管/晶体管'
@@ -262,6 +289,9 @@ families:
     sample_parts: ['C7519', 'C7420375', 'C2827654']
   bjt:
     label_cn: '三极管(BJT)'
+    family_key: 'bjt'
+    function_keywords: ['三极管', 'BJT', '晶体管', '达林顿', '电流:', '电压:']
+    exclude_keywords: ['光耦', '光电晶体管', '场效应管', 'MOSFET', '数字晶体管', '反射式光电开关', '万用表', '红外遥控', '散热片']
     keywords: ['三极管', 'BJT']
     catalog_id: '326'
     parent: '三极管/MOS管/晶体管'
@@ -287,6 +317,9 @@ families:
     sample_parts: ['C2150', 'C7420370', 'C20526']
   mosfet:
     label_cn: '场效应管(MOSFET)'
+    family_key: 'mosfet'
+    function_keywords: ['场效应管', 'MOSFET', '沟道', '耐压', 'MOS']
+    exclude_keywords: ['栅极驱动', '碳化硅', 'DC-DC', 'AC-DC', '肖特基', '功率电子开关', 'LDO', '线性稳压', '三极管', '固态继电器', 'IPM', '智能功率模块']
     keywords: ['MOSFET', 'MOS管', '场效应管']
     catalog_id: '381'
     parent: '三极管/MOS管/晶体管'
@@ -312,6 +345,9 @@ families:
     sample_parts: ['C15127', 'C20917', 'C8545']
   mcu:
     label_cn: '单片机(MCU/MPU/SOC)'
+    family_key: 'mcu'
+    function_keywords: ['MCU', '单片机', 'ARM', 'Cortex', 'Flash', 'DSP']
+    exclude_keywords: ['电信接口', 'LCD驱动', '验证板', '开发板', 'NOR FLASH', '模拟开关', '多路复用器', '移位寄存器', '仿真器', '烧录器', '防静电托盘', '数码管驱动']
     keywords: ['单片机', 'MCU']
     catalog_id: '11329'
     parent: '单片机/微控制器'
@@ -345,6 +381,9 @@ families:
     sample_parts: ['C8734', 'C28730', 'C8323']
   ldo:
     label_cn: '线性稳压器(LDO)'
+    family_key: 'ldo'
+    function_keywords: ['LDO', '线性稳压', '低压差', '低压降']
+    exclude_keywords: ['DC-DC', '开关稳压', '电荷泵', 'PMIC', '电池管理', '霍尔', 'POE', 'PoE', '射频', '电机驱动', '栅极驱动', '以太网']
     keywords: ['LDO', '线性稳压器']
     catalog_id: '387'
     parent: '电源管理'
@@ -370,6 +409,9 @@ families:
     sample_parts: ['C6186', 'C347222', 'C82942']
   dcdc:
     label_cn: 'DC-DC电源芯片'
+    family_key: 'dcdc'
+    function_keywords: ['降压型', '升压型', '升降压型', 'DC-DC', 'Buck', 'Boost', '转换器']
+    exclude_keywords: ['LDO', '线性稳压', '电荷泵', 'LED驱动', '电源模块', '基准', '负载开关', '电子保险丝', '过压保护', '热插拔', 'PMIC', '充电管理']
     keywords: ['DC-DC电源芯片', 'DC-DC', 'DCDC']
     catalog_id: '484'
     parent: '电源管理'
@@ -399,6 +441,9 @@ families:
     sample_parts: ['C9864', 'C311983', 'C61063']
   opamp:
     label_cn: '运算放大器'
+    family_key: 'opamp'
+    function_keywords: ['运算放大器', '放大器', '轨到轨', 'RRIO', '低噪声', '运放']
+    exclude_keywords: ['比较器', '精密运放', 'FET输入', '音频功率放大器', '视频放大器', '仪表放大器', '电流感应放大器', '差分运放', 'DSP', '特殊功能放大器']
     keywords: ['运算放大器', '运放']
     catalog_id: '516'
     parent: '运算放大器/比较器'
@@ -436,6 +481,9 @@ families:
     sample_parts: ['C7950', 'C7972', 'C5423']
   comparator:
     label_cn: '比较器'
+    family_key: 'comparator'
+    function_keywords: ['比较器', '差分比较器', '纳秒', '推挽']
+    exclude_keywords: ['运算放大器', '温度传感器', '电流感应放大器', '数字比较器', '监控和复位', 'DSP', 'ADC', '隔离式比较器', '特殊功能放大器']
     keywords: ['比较器']
     catalog_id: '517'
     parent: '运算放大器/比较器'
@@ -477,6 +525,9 @@ families:
     sample_parts: ['C7955', 'C67470', 'C105188']
   vref:
     label_cn: '电压基准芯片'
+    family_key: 'vref'
+    function_keywords: ['串联', '并联', '基准', 'ppm']
+    exclude_keywords: ['稳压二极管', 'LDO', 'DC-DC', '电荷泵', 'PMIC', '隔离电源']
     keywords: ['电压基准芯片', '电压基准']
     catalog_id: '486'
     parent: '电源管理'
@@ -506,6 +557,9 @@ families:
     sample_parts: ['C3113', 'C36658', 'C11334']
   eeprom:
     label_cn: 'EEPROM'
+    family_key: 'eeprom'
+    function_keywords: ['EEPROM', '串行', '电可擦除', 'I2C', '两线制']
+    exclude_keywords: ['单片机', '数字电位器', '监控和复位', '射频卡', '温度传感器', 'DAC', 'nvSRAM', 'FRAM', '加密芯片', 'FPGA配置', 'RTC', 'USB转换']
     keywords: ['EEPROM']
     catalog_id: '502'
     parent: '存储器'
@@ -531,6 +585,9 @@ families:
     sample_parts: ['C6482', 'C79988', 'C688857']
   norflash:
     label_cn: 'NOR FLASH'
+    family_key: 'norflash'
+    function_keywords: ['闪存', 'NOR', 'SPI', '四路', '双路', '串行闪存']
+    exclude_keywords: ['单片机', 'FPGA配置', 'EEPROM', '多芯片封装', 'SD卡', 'eMMC', 'DDR']
     keywords: ['NOR FLASH', 'NORFLASH']
     catalog_id: '501'
     parent: '存储器'
@@ -556,6 +613,9 @@ families:
     sample_parts: ['C97521', 'C179171', 'C179173']
   crystal:
     label_cn: '无源晶振'
+    family_key: 'crystal'
+    function_keywords: ['无源', '晶振', 'MHZ', 'PPM', 'PF']
+    exclude_keywords: ['有源', '振荡器', 'TCXO', '谐振器', 'LoRa', 'CMOS']
     keywords: ['无源晶振']
     catalog_id: '537'
     parent: '振荡器/谐振器'
@@ -581,6 +641,9 @@ families:
     sample_parts: ['C9006', 'C115962', 'C32346']
   oscillator:
     label_cn: '有源晶振'
+    family_key: 'oscillator'
+    function_keywords: ['有源', '振荡器', 'CMOS', 'OSC', 'PPM']
+    exclude_keywords: ['无源', 'TCXO', '预编程', 'LoRa', '谐振器', '晶振']
     keywords: ['有源晶振']
     catalog_id: '364'
     parent: '振荡器/谐振器'
@@ -606,6 +669,9 @@ families:
     sample_parts: ['C669088', 'C717684', 'C5203552']
   optocoupler:
     label_cn: '晶体管输出光耦'
+    family_key: 'optocoupler'
+    function_keywords: ['光耦', '光电', '隔离电压', 'DC输入', '晶体管输出']
+    exclude_keywords: ['固态继电器', '可控硅输出', '逻辑输出', '栅极驱动', '数字隔离器', '光耦仿真器', 'AC-DC', 'LED驱动', '隔离式']
     keywords: ['光耦', '光电耦合器']
     catalog_id: '351'
     parent: '光耦'
@@ -635,6 +701,9 @@ families:
     sample_parts: ['C115450', 'C42379244', 'C42381015']
   isolator:
     label_cn: '数字隔离器'
+    family_key: 'isolator'
+    function_keywords: ['数字隔离器', '隔离器', '双通道', '增强型', 'ESD']
+    exclude_keywords: ['光耦', '隔离式USB', '隔离式SPI', '隔离式I2C', '隔离式DC/DC', 'AC-DC', '逻辑输出光耦', 'RS-485', 'RS422']
     keywords: ['数字隔离器']
     catalog_id: '581'
     parent: '信号隔离器件'
@@ -664,6 +733,9 @@ families:
     sample_parts: ['C366164', 'C9669', 'C41409433']
   connector:
     label_cn: '排针'
+    family_key: 'connector'
+    function_keywords: ['排针', '间距', '方针', '直插', '弯插']
+    exclude_keywords: ['排母', 'IDC', '牛角', '简牛', '电源连接器', '汽车连接器', 'HDMI', 'D-Sub', 'RJ45', '板对板', '连接器外壳', '端子', '接线盒']
     keywords: ['排针']
     catalog_id: '644'
     parent: '连接器'
@@ -693,6 +765,9 @@ families:
     sample_parts: ['C2691448', 'C492401', 'C2937625']
   relay:
     label_cn: '功率继电器'
+    family_key: 'relay'
+    function_keywords: ['继电器', '单刀', '常开', '常闭', '转换型']
+    exclude_keywords: ['固态继电器', '信号继电器', '磁保持', '汽车继电器', '簧片继电器', '继电器插座', '热过载', '接线盒', '驱动芯片', 'MOSFET']
     keywords: ['继电器', '功率继电器']
     catalog_id: '531'
     parent: '继电器'
@@ -724,3 +799,41 @@ families:
     key_constraints: ['线圈电压', '触点形式', '触点容量(电阻负载)']
     sample_size: 30
     sample_parts: ['C35449', 'C30431', 'C34758']
+  powerswitch:
+    label_cn: '功率电子开关(负载开关/eFuse)'
+    family_key: 'powerswitch'
+    function_keywords: ['负载开关', '电子保险丝', 'eFuse', 'EFUSE', '过压保护开关', '热插拔',
+                        'ORing', '理想二极管', '电源分配开关', '限流开关']
+    exclude_keywords: ['降压转换器', '升压', 'DC-DC', 'LDO', '线性稳压', '充电管理', '降压型',
+                       '升压型', '稳压二极管', 'TVS', '静电和浪涌保护', '基准', 'LED驱动']
+    keywords: ['负载开关', '电子保险丝', 'eFuse', '功率电子开关', '电源分配开关']
+    catalog_id: '969'
+    parent: '电源管理'
+    param_keys:
+      - key: '类型'
+        unit: null
+        examples: ['负载开关']
+        kind: enum
+      - key: '工作电压'
+        unit: 'V'
+        examples: ['2.4V~5.5V', '1.6V~5.5V', '2.7V~23V', '3V~32V']
+        kind: value
+      - key: '通道数'
+        unit: null
+        examples: ['1', '2']
+        kind: value
+      - key: '输入控制逻辑'
+        unit: null
+        examples: ['高电平有效', '低电平有效']
+        kind: enum
+      - key: '最大连续电流'
+        unit: 'A'
+        examples: ['1A', '2A', '3A', '6A']
+        kind: value
+      - key: '导通电阻'
+        unit: 'Ω'
+        examples: ['14mΩ', '25mΩ', '45mΩ', '90mΩ', '250mΩ']
+        kind: value
+    key_constraints: ['工作电压', '最大连续电流', '通道数']
+    sample_size: 90
+    sample_parts: ['C22912', 'C47345802', 'C3662799']

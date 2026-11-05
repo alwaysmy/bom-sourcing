@@ -118,3 +118,52 @@ LDO/DC-DC 的 `3.3V` → 输出电压；MOS 的 `30V` → 漏源电压；TVS 的
 - 品类共 25 个 family（`pick.py cats` 可列）：`ldo/dcdc/mosfet/bjt/mcu/opamp/comparator/vref/eeprom/
   norflash/crystal/oscillator/isolator/optocoupler/relay/connector/resistor/mlcc/inductor/bead/led/
   diode/schottky/tvs/esd`。**TVS 与 ESD 在立创是同一个 catalog（526）**，靠关键词区分，候选池高度重叠。
+
+## 9. 功能符合性闸门（参数满足 ≠ 功能对）
+
+立创的品类是**按采购口径**分的，不是按功能分的：`功率电子开关(969)` 里同时挂着
+负载开关、eFuse、过压保护开关、**同步降压转换器**、理想二极管 ORing。
+`productType` 是 catalog 级标签，实测 6 个可疑品类各 3 页 × 3 排序共 890 条，纯度全部 1.00
+—— 拿它做功能校验，`MP4316GRE-Z`（45V/6A 同步降压转换器）会以"功率电子开关"身份 100% 通过。
+
+因此 `pick.py` 在参数筛选之后再加一道 `function_gate()`：
+
+| 判定 | 条件 | 处置 |
+|---|---|---|
+| `ok` | 命中正向词、无反向词 | 输出 |
+| `mismatch` | 只命中反向词 | **剔除**（进"落选主因"） |
+| `conflict` | 正反都命中 | 保留 + 打警告 |
+| `unknown` | 都没有 | 保留 + 提示查手册 |
+
+正反都命中时的裁决：**谁更具体听谁的**（`集成TVS的28V/5A过压保护开关` → 正向词"过压保护开关"(6) 长于
+反向词"TVS"(3) → 判 ok，并注明"TVS 属集成的保护功能"）。
+
+词表位置：`data/categories.yaml` 每个 family 的 `function_keywords` / `exclude_keywords`
+（26 个 family，129 正向词 / 238 反向词）。`--no-func` 关闭。
+
+**`unknown` 不是"功能不符"**：`productName` 可信度分三级 ——
+
+- A 级（17 个 family）：名字里有明确中文功能词，可直接判定；
+- B 级（`schottky` / `bjt`）：名字只有 `电压:40V 电流:3A` 这种格式特征；
+- C 级（`mlcc` / `inductor` / `ldo` / `diode` / `crystal` / `oscillator`）：名字是纯参数或纯型号，
+  功能校验完全退化到 `catalog_id`。
+
+C 级和"商品名只有型号"的料（如 `HS2950P.M`）必须走降级链：
+`catalog_id` 收敛 → 名称词表 → `lightProductIntro` → 参数键集合 → 数据手册第一段
+（`python lcsc.py detail <C号> --pdf --download <目录>`）→ 原厂/分销商描述
+（`python distributor.py search "<型号>" --site mouser`）。
+功率 >1A 或带保护功能的选型，最后一步不能省。
+
+## 10. 参数键缺失时的商品名兜底
+
+立创相当一部分料把关键指标只写在商品名里（`功率电子开关` 品类里 `最大连续电流` 只有 8/90 条记录有），
+`paramLinkedMap` 反而缺。`check_one()` 在参数键找不到时，会按物理量从 `productName` 里再抽一次：
+
+- 电压取**最大**（`2.7 - 18V` → 18；`1V至5.5V` → 5.5）
+- 电流 / 电阻按单位换算（`mA` / `mΩ` / `kΩ`）
+- 抽不到就返回 `unknown`（**不猜**），仍按"缺参数视为不满足"处理
+
+## 11. 区间需求
+
+「工作电压」这类是区间量：`3.3V~21V` 表示**候选区间必须覆盖这两头**（`Constraint(op="cover")`）。
+商品名兜底时只能拿到上限，因此该分支只校验上界，并在结果里保持"参数键优先"。

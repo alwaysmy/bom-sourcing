@@ -89,7 +89,7 @@ User-Agent: 任意现代浏览器 UA
 | `demandNumber` | ⚠️ | 不改变返回的阶梯价，只影响部分展示字段 |
 | `queryParameterValue` + `lastParamName` | ❌ | 试了多种写法都返回 0 条，用法未明，暂不使用；参数区间筛选改用「关键词 + 本地 `paramLinkedMap` 过滤」 |
 | `catalogIdFilter` / `brandPlaceFilter` / `labelFilter` / `authenticationFilter` / `arrangeFilter` | ✅ | 类目/品牌产地/标签/认证/包装方式，取值同样来自 facet |
-| `spotFilter` | ✅ | 1=只看现货（默认），0=含无货 |
+| `spotFilter` | ⚠️ | **只认 `1`**（默认）。传 `0` 会**静默返回 0 条**（实测：同一关键词 `1`→3 条、`0`→0 条），不是"包含无货" |
 | `discountFilter` | 未证实差异 | 默认 1 |
 
 **多值分隔符是 `$` 不是逗号**：`brandIdFilter: "91$842"`（两个品牌）、`standardFilter: "0805$0603"`。
@@ -104,9 +104,21 @@ User-Agent: 任意现代浏览器 UA
 | 用途 | URL |
 |---|---|
 | 商品页 | `https://item.szlcsc.com/{productId}.html`（200，无需 JS；**用数字 productId 不是 C 号**） |
-| 数据手册 | `https://datasheet.lcsc.com/{pdfDESProductId}.pdf`（200，直接 PDF） |
-| 手册（OSS 签名直链） | `atta.szlcsc.com` + `pdfFileDetailVO.fileUrl` + `urlSign`（原样拼接即可，实测 2MB PDF） |
+| ~~数据手册（旧直链）~~ | ~~`https://datasheet.lcsc.com/{pdfDESProductId}.pdf`~~ —— **2026-11 实测已失效**：返回 HTTP 200 但只有 101~117 字节的 `window.top.location.href` 跳转页 |
+| 手册（OSS 签名直链，可用） | 商品页 HTML 里的 `pdfFileDetailVO.fileUrl` + `urlSign` → `https://atta.szlcsc.com/upload/public/pdf/source/...pdf?Expires=...&OSSAccessKeyId=...&Signature=...`（`&amp;` 要还原成 `&`，实测 C8734 取到 2 MB PDF） |
 | 海外站详情 | `https://www.lcsc.com/product-detail/{C编号}.html` |
+
+取手册的正确姿势（`lcsc.py` 已封装为 `Lcsc.datasheet_pdf(code, download=None)`）：
+
+1. `lookup(code)` 拿 `product_id`（数字）
+2. `GET https://item.szlcsc.com/{product_id}.html`
+3. 正则 `https://atta\.szlcsc\.com/[^"'<>\ ]+?\.pdf(?:\?[^"'<>\ ]*)?` 找出全部候选，**取最长的那条**
+   （页面里同一份 PDF 出现多次，前面是不带签名的裸地址，会被跳转拦截）
+4. `html.unescape()` 还原 `&amp;`
+5. 下载时用 `build_opener(ProxyHandler({}))` 直连
+
+CLI：`python scripts/lcsc.py detail C8734 --pdf`（取直链）/ `--download 目录`（下载成 `C8734.pdf`）。
+没上传手册的料（如 C3662789）商品页里没有 `pdfFileDetailVO`，工具会明确报"没有 PDF"，不要当失败重试。
 
 ## 5. 替代料接口（推荐，比海外站全得多）
 
@@ -145,6 +157,8 @@ body: {}
 | `GET https://wmsc.lcsc.com/wmsc/search/global?...` | `{"code":404,"msg":"The static resource is unavailable…"}`，不可用 |
 | `GET https://cart.jlcpcb.com/shoppingCart/smtGood/getComponentDetail?componentCode=C8734` | 200 可用，但字段少（datasheet 直链、图片），中文参数与替代料都没有；已被 §1+§4 取代 |
 | LCSC 官方 OpenAPI（`https://www.lcsc.com/docs/openapi/`） | 需 apikey，否则 401；文档可读但无 key 无法调用 |
+| `spotFilter: 0` | **静默返回 0 条**（不是“不过滤”）：同一关键词 `1`→3 条、`0`→0 条。`lcsc.py` 已改为只接受 1，传其它值直接抛 `ValueError` |
+| `POST /query/product` 高频请求 | 触发 EdgeOne WAF，返回 **HTTP 203 + `tws2_` 挑战页**（脚本侧表现为 JSON 解析失败）。属瞬时限流：停几分钟自动解除；`lcsc.py` 会抛 `AntiBotError` 并提示 `--rate`/`cookie` |
 
 ## 8. 同型号多 C 号（配单必踩）
 

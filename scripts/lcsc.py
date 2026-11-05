@@ -38,13 +38,37 @@ if hasattr(sys.stdout, "reconfigure"):
 
 SEARCH_URL = "https://so.szlcsc.com/query/product"
 ITEM_URL = "https://item.szlcsc.com/{product_id}.html"
-DATASHEET_URL = "https://datasheet.lcsc.com/{pdf_id}.pdf"
+# 数据手册：旧的 https://datasheet.lcsc.com/{pdfDESProductId}.pdf 已失效（只回 100 余字节跳转页），
+# 真实 PDF 是商品页 pdfFileDetailVO 里的 atta.szlcsc.com 签名直链，见 Lcsc.datasheet_pdf()。
+_PDF_URL_RE = re.compile(
+    r"https://atta\.szlcsc\.com/[^\"'<>\\ ]+?\.pdf(?:\?[^\"'<>\\ ]*)?", re.I
+)
 # 替代料接口：比海外站全（C8734 → 36 条 vs 5 条），带 simScore 与参数差异。body 必须是 {}
 SUBSTITUTE_URL = "https://list.szlcsc.com/substitute/simple/list?productCode={code}"
 # 海外站商品页内嵌 __NEXT_DATA__，是**唯一**带替代料明细的入口（中文站没有）
 DETAIL_URL = "https://www.lcsc.com/product-detail/{code}.html"
 _NEXTDATA_RE = re.compile(
     r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', re.S
+)
+
+
+class AntiBotError(RuntimeError):
+    """立创反爬（HTTP 203 + tws2_ JS 挑战）：请求太密时出现，通常是瞬时的。"""
+
+    exit_code = 3
+
+    def __init__(self, message, hint=""):
+        super().__init__(message)
+        self.hint = hint
+
+
+_ANTIBOT_MSG = "立创触发了反爬（HTTP 203 / tws2_ 挑战）"
+_ANTIBOT_HINT = (
+    "请求太密被打回。处置（按代价从低到高）：\n"
+    "  1) 等 3~10 分钟再试，并把 --rate 调大（如 2.0，即 QPS≤0.5）；\n"
+    "  2) 少翻页：--pages 1、单页 ≤30 条（pageSize>30 会静默返 0 条）；\n"
+    "  3) 用真实浏览器取一次 cookie 存下来（之后自动带上）：python lcsc.py cookie；\n"
+    "  4) 若 ③ 也不行，说明该出口 IP 被封，换网络或用浏览器的 fetch 通道。"
 )
 
 # sortNumber 实测语义（详见 references/lcsc-api.md）
@@ -98,7 +122,38 @@ CACHE_DIR = Path(
 ) / "lcsc"
 CACHE_TTL = int(os.environ.get("BOM_CACHE_TTL", 6 * 3600))
 
+# 反爬（HTTP 203 + tws2_ JS 挑战）是**瞬时限流**：请求太密会命中，停几分钟自动解除。
+# 命中后不要死循环重试，给明确提示；需要立即恢复时可用真实浏览器取一次 cookie 再带着走。
+COOKIE_FILE = Path(
+    os.environ.get("BOM_COOKIE_FILE")
+    or (Path(os.environ.get("LOCALAPPDATA", Path.home())) / "bom-sourcing" / "lcsc-cookie.txt")
+)
+
 _TAG_RE = re.compile(r"<[^>]+>")
+
+
+def load_cookie():
+    """cookie 来源：环境变量 LCSC_COOKIE > 文件 ~/AppData/Local/bom-sourcing/lcsc-cookie.txt。"""
+    val = os.environ.get("LCSC_COOKIE", "").strip()
+    if val:
+        return val
+    try:
+        if COOKIE_FILE.exists():
+            return COOKIE_FILE.read_text("utf-8").strip()
+    except OSError:
+        pass
+    return ""
+
+
+def _looks_like_challenge(text, status):
+    """立创反爬页：HTTP 203 + 混淆 JS（含 tws2_ / _xvasu），不是 JSON。"""
+    head = (text or "")[:600].lstrip()
+    if status == 203:
+        return True
+    if head.startswith("<") and ("tws2_" in head or "_xvasu" in head):
+        return True
+    return False
+
 
 
 # ----------------------------------------------------------------------------- utils
@@ -155,10 +210,11 @@ def cache_put(key, obj):
 
 # ----------------------------------------------------------------------------- client
 class Lcsc:
-    def __init__(self, rate_limit=1.0, retries=3, use_cache=True):
+    def __init__(self, rate_limit=1.0, retries=3, use_cache=True, cookie=""):
         self.rate_limit = rate_limit
         self.retries = retries
         self.use_cache = use_cache
+        self.cookie = cookie or ""
         self._last = 0.0
 
     def _throttle(self):
@@ -169,15 +225,28 @@ class Lcsc:
 
     def _post(self, body):
         data = json.dumps(body, ensure_ascii=False).encode("utf-8")
+        headers = dict(HEADERS)
+        cookie = self.cookie or load_cookie()
+        if cookie:
+            headers["cookie"] = cookie
         last = None
         for attempt in range(self.retries):
             self._throttle()
-            req = urllib.request.Request(SEARCH_URL, data=data, headers=dict(HEADERS), method="POST")
+            req = urllib.request.Request(SEARCH_URL, data=data, headers=headers, method="POST")
             try:
                 with urllib.request.urlopen(req, timeout=25) as r:
-                    return json.loads(r.read().decode("utf-8", "replace"))
+                    text = r.read().decode("utf-8", "replace")
+                if _looks_like_challenge(text, 200):
+                    raise AntiBotError(_ANTIBOT_MSG)
+                return json.loads(text)
+            except AntiBotError:
+                # 命中反爬：不要快速重试（重试只会延长封禁），直接给出可执行的处置建议
+                raise
             except urllib.error.HTTPError as e:
-                last = f"HTTP {e.code}: {e.read()[:200]!r}"
+                body_text = e.read().decode("utf-8", "replace")
+                if _looks_like_challenge(body_text, e.code):
+                    raise AntiBotError(_ANTIBOT_MSG) from None
+                last = f"HTTP {e.code}: {body_text[:200]!r}"
             except Exception as e:  # noqa: BLE001
                 last = f"{type(e).__name__}: {e}"
             time.sleep(1.5 * (attempt + 1))
@@ -187,6 +256,9 @@ class Lcsc:
     def raw_search(self, keyword, sort=0, page=1, page_size=30, brand_id="", package="",
                    price_min="", price_max="", demand_number="", spot=1, discount=1,
                    catalog_id="", cache=True):
+        # spotFilter 只认 1（含现货）：传 0 会**静默返回 0 条**（实测，不是"不过滤"）
+        if spot not in (1, True):
+            raise ValueError(f"spotFilter 只接受 1（含现货）；传 {spot!r} 会静默返回 0 条结果")
         body = dict(DEFAULT_BODY)
         body.update(
             keyword=keyword,
@@ -285,15 +357,59 @@ class Lcsc:
     def _get_direct(self, url):
         """直连取页：www.lcsc.com 走系统代理会 SSLEOFError，必须绕开代理。"""
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-        req = urllib.request.Request(
-            url,
-            headers={
-                "user-agent": HEADERS["user-agent"],
-                "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
-            },
-        )
+        headers = {
+            "user-agent": HEADERS["user-agent"],
+            "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
+        }
+        cookie = self.cookie or load_cookie()
+        if cookie:
+            headers["cookie"] = cookie
+        req = urllib.request.Request(url, headers=headers)
         with opener.open(req, timeout=40) as r:
-            return r.read().decode("utf-8", "replace")
+            text = r.read().decode("utf-8", "replace")
+        if _looks_like_challenge(text, 200):
+            raise AntiBotError(_ANTIBOT_MSG, _ANTIBOT_HINT)
+        return text
+
+    # -- 数据手册（PDF 签名直链 / 下载） ---------------------------------------
+    def datasheet_pdf(self, product_code, download=None):
+        """取数据手册 PDF 的签名直链，可选下载到本地。
+
+        实测（2026-11）：
+          - https://datasheet.lcsc.com/{pdfDESProductId}.pdf 只返回 101~117 字节的跳转 HTML（已失效）
+          - 真实 PDF 在商品页 pdfFileDetailVO 里：atta.szlcsc.com + OSS 签名参数
+        返回 (url, path)；没有手册的料 os 返回 (None, None)。
+        """
+        code = product_code.strip().upper()
+        key = "pdf:" + code
+        url = cache_get(key, ttl=6 * 3600) if self.use_cache else None
+        if not url:
+            rec = self.lookup(code)
+            pid = (rec or {}).get("product_id")
+            if not pid:
+                return None, None
+            page = self._get_direct(ITEM_URL.format(product_id=pid))
+            # 页面里同一份 PDF 出现多次：先是不带签名的裸地址（会被跳转拦截），
+            # 后面才是带 Expires/Signature 的可用直链 → 取最长的那条。
+            cands = [html.unescape(m.group(0)) for m in _PDF_URL_RE.finditer(page)]
+            if not cands:
+                return None, None
+            url = max(cands, key=len)
+            if self.use_cache:
+                cache_put(key, url)
+        if not download:
+            return url, None
+        path = Path(download)
+        # 目录（含"还没建的目录"）→ 存成 <C号>.pdf；给了 .pdf 后缀才当文件路径
+        if path.is_dir() or not path.suffix:
+            path = path / f"{code}.pdf"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._throttle()
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        req = urllib.request.Request(url, headers={"user-agent": HEADERS["user-agent"]})
+        with opener.open(req, timeout=60) as r:
+            path.write_bytes(r.read())
+        return url, path
 
     def intl_detail(self, product_code):
         """海外站商品页 webData：中文参数表、美元阶梯价、替代料清单。"""
@@ -514,7 +630,6 @@ def normalize(record):
         price = p.get("productPrice")
         ladder.append({"qty_from": a, "qty_to": b, "price": price})
     ladder.sort(key=lambda x: x["qty_from"])
-    pdf_id = vo.get("pdfDESProductId")
     pid = vo.get("productId")
     return {
         "code": vo.get("productCode"),
@@ -534,7 +649,8 @@ def normalize(record):
         "reel": vo.get("productMinEncapsulationNumber"),
         "reel_unit": vo.get("productMinEncapsulationUnit"),
         "ladder": ladder,
-        "datasheet": DATASHEET_URL.format(pdf_id=pdf_id) if pdf_id else None,
+        # 手册直链不在这里给：旧 URL 已失效，真链接每次都要从商品页换签名 → Lcsc.datasheet_pdf()
+        "datasheet": None,
         "url": ITEM_URL.format(product_id=pid) if pid else None,
         "product_id": pid,
         "smt": vo.get("smtLabel"),
@@ -599,10 +715,15 @@ def print_search(res, qty=1, show_params=False, params_keys=None):
     print()
 
 
+def _client(a):
+    """按命令行参数构造客户端（--rate 控制请求间隔，默认 1.0s，即 QPS≤1）。"""
+    return Lcsc(rate_limit=float(getattr(a, "rate", 1.0) or 1.0), use_cache=not a.no_cache)
+
+
 def cmd_search(a):
-    cli = Lcsc(use_cache=not a.no_cache)
+    cli = _client(a)
     kw = dict(sort=a.sort, page_size=30, price_min=a.price_min, price_max=a.price_max,
-              spot=0 if a.include_out_of_stock else 1)
+              spot=1)  # spotFilter 只认 1；--include-out-of-stock 不影响服务端（缺货靠 stock 字段判断）
     if a.brand:
         bid = cli.resolve_brand_id(a.keyword, a.brand)
         if not bid:
@@ -619,7 +740,7 @@ def cmd_search(a):
 
 
 def cmd_price(a):
-    cli = Lcsc(use_cache=not a.no_cache)
+    cli = _client(a)
     rec = cli.lookup(a.code)
     if not rec:
         print(f"未找到 {a.code}")
@@ -630,13 +751,14 @@ def cmd_price(a):
         "package": rec["package"], "qty": a.qty, "unit_price": unit,
         "total": round(unit * a.qty, 4) if unit is not None else None,
         "stock": rec["stock"], "sales": rec["sales"], "min_buy": rec["min_buy"],
-        "ladder": rec["ladder"], "url": rec["url"], "datasheet": rec["datasheet"],
+        "ladder": rec["ladder"], "url": rec["url"],
+        "datasheet_hint": f"python lcsc.py detail {rec['code']} --pdf",
         "params": rec["params"],
     }, ensure_ascii=False, indent=1))
 
 
 def cmd_detail(a):
-    cli = Lcsc(use_cache=not a.no_cache)
+    cli = _client(a)
     rec = cli.lookup(a.code)
     if not rec:
         print(f"未找到 {a.code}")
@@ -648,8 +770,16 @@ def cmd_detail(a):
           f"起订: {rec['min_buy']}  整盘: {rec['reel']}{rec['reel_unit'] or ''}")
     print(f"  阶梯价: " + "  ".join(f"{t['qty_from']}-{t['qty_to']}:{money(t['price'])}" for t in rec["ladder"]))
     print(f"  {rec['url']}")
-    if rec["datasheet"]:
-        print(f"  datasheet: {rec['datasheet']}")
+    if a.pdf or a.download:
+        url, path = cli.datasheet_pdf(a.code, download=a.download)
+        if url:
+            print(f"  数据手册: {url}")
+            if path:
+                print(f"  已下载: {path}（{path.stat().st_size} 字节）→ 用 read-pdf skill 读")
+        else:
+            print("  数据手册: 该料没有上传 PDF，或商品页结构已变")
+    else:
+        print("  数据手册: 加 --pdf 取直链（旧的 datasheet.lcsc.com 直链已失效）")
     if rec["params"]:
         print("  参数:")
         for k, v in rec["params"].items():
@@ -660,7 +790,7 @@ def cmd_detail(a):
 
 def cmd_compare(a):
     rows = []
-    cli = Lcsc(use_cache=not a.no_cache)
+    cli = _client(a)
     for code in a.codes:
         rec = cli.lookup(code)
         if rec:
@@ -699,7 +829,7 @@ def cmd_compare(a):
 
 
 def cmd_alternate(a):
-    cli = Lcsc(use_cache=not a.no_cache)
+    cli = _client(a)
     res = cli.alternates(a.code, qty=a.qty, limit=a.limit, enrich=not a.no_enrich)
     if a.json:
         print(json.dumps(res, ensure_ascii=False, indent=1))
@@ -737,6 +867,47 @@ def cmd_alternate(a):
           "「参数差异」列只列接口返回的参数，未列出的参数不代表相同。")
 
 
+def cmd_cookie(a):
+    """用真实浏览器（Kimi WebBridge）取一次 so.szlcsc.com 的 cookie 并落盘。
+
+    立创的反爬（HTTP 203 + tws2_ 挑战）本质是「让 JS 算一个 cookie 再放行」，
+    浏览器里 JS 跑完就有了。取到的 cookie 存到 COOKIE_FILE，之后所有请求自动带上。
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    try:
+        import taobao  # 同目录，复用它的 WebBridge 客户端
+    except ImportError as e:
+        print(f"取 cookie 需要同目录的 taobao.py（Kimi WebBridge 客户端）：{e}", file=sys.stderr)
+        return 2
+    br = taobao.Bridge(session="bom-sourcing", timeout=120)
+    st = br.status()
+    if not st.get("running") or not st.get("extension_connected"):
+        print("WebBridge 未就绪（daemon 或浏览器扩展未连接）。先启动 Kimi WebBridge。", file=sys.stderr)
+        return 2
+    print("[1/3] 打开 so.szlcsc.com（让 JS 跑完反爬挑战）…")
+    br.navigate("https://so.szlcsc.com/global.html?k=STM32F103C8T6", new_tab=True,
+                group_title="配单比价")
+    for i in range(1, 7):
+        time.sleep(2)
+        ck = br.evaluate("document.cookie") or ""
+        if "tws2_" in ck:
+            print(f"[2/3] 拿到 cookie（第 {i} 次轮询，{len(ck)} 字符）")
+            break
+    else:
+        print("没等到 tws2_ cookie：挑战可能没触发（那就说明已解封，直接跑 search 即可）",
+              file=sys.stderr)
+        return 1
+    COOKIE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    COOKIE_FILE.write_text(ck, "utf-8")
+    print(f"[3/3] 已保存到 {COOKIE_FILE}")
+    if a.show:
+        print("cookie:", ck)
+    else:
+        print("关键项:", ", ".join(k for k in ck.split("; ") if k.startswith(("tws2_", "isLogin", "ssxmod"))))
+    print("验证：python lcsc.py search STM32F103C8T6 --limit 3")
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="立创商城检索/比价/指标 CLI")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -751,7 +922,9 @@ def main(argv=None):
     s.add_argument("--package", default="", help="封装，如 0603 / LQFP-48")
     s.add_argument("--price-min", default="")
     s.add_argument("--price-max", default="")
-    s.add_argument("--include-out-of-stock", action="store_true")
+    s.add_argument("--include-out-of-stock", action="store_true",
+                    help="服务端 spotFilter 只认 1（这里保留参数兼容旧脚本）；"
+                         "缺货与否看输出的「库存」列")
     s.add_argument("--show-params", action="store_true")
     s.add_argument("--param", nargs="*", default=None, help="只显示这些参数键")
     s.add_argument("--json", action="store_true")
@@ -765,8 +938,11 @@ def main(argv=None):
     p.add_argument("--no-cache", action="store_true")
     p.set_defaults(func=cmd_price)
 
-    d = sub.add_parser("detail", help="查看参数详情")
+    d = sub.add_parser("detail", help="查看参数详情（--pdf 取数据手册直链）")
     d.add_argument("code")
+    d.add_argument("--pdf", action="store_true", help="解析数据手册 PDF 的签名直链")
+    d.add_argument("--download", nargs="?", const=".", default=None,
+                   help="下载 PDF（可给目录或文件路径；省略参数则存当前目录）")
     d.add_argument("--json", action="store_true")
     d.add_argument("--no-cache", action="store_true")
     d.set_defaults(func=cmd_detail)
@@ -787,8 +963,21 @@ def main(argv=None):
     al.add_argument("--no-cache", action="store_true")
     al.set_defaults(func=cmd_alternate)
 
+    ck = sub.add_parser("cookie", help="用真实浏览器取一次立创 cookie（反爬时用）")
+    ck.add_argument("--show", action="store_true", help="打印 cookie（默认只报长度与关键项）")
+    ck.set_defaults(func=cmd_cookie)
+
+    for _p in sub.choices.values():  # 所有子命令共享限速参数
+        _p.add_argument("--rate", type=float, default=1.0,
+                        help="请求间隔秒数（默认 1.0，即 QPS≤1；被反爬时调大）")
+
     a = ap.parse_args(argv)
-    return a.func(a) or 0
+    try:
+        return a.func(a) or 0
+    except AntiBotError as e:
+        print(f"[反爬] {e}", file=sys.stderr)
+        print(e.hint or _ANTIBOT_HINT, file=sys.stderr)
+        return AntiBotError.exit_code
 
 
 if __name__ == "__main__":

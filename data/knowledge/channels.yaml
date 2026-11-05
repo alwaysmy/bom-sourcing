@@ -1,0 +1,539 @@
+# =============================================================================
+# 渠道特性表 —— 配单 / 选料的渠道知识库（机读版）
+#
+# 用途：agent 在 D5「成本与渠道」步骤读本表决定「在哪买、买多少」。
+# 用法：channel_selection.rules 按顺序匹配，第一条命中的即推荐渠道。
+# 人读版：references/channels.md（渠道性情详解）、references/methodology.md §7
+#
+# 维护约定：
+#   1. 每条结论必须有 sources；不确定的写 evidence: experience 并在 note 里说清
+#   2. 价格类数字一律标采集时间（价格是瞬时快照）
+#   3. 平台规则类（组合限制、收费）以官方口径为准，优先于任何经验
+# =============================================================================
+
+schema: bom-sourcing/knowledge/channels
+version: 1
+generated: '2026-11-05'
+locale: zh-CN
+
+purpose: >-
+  把「在哪个渠道买最合适」从拍脑袋变成可匹配的规则表。渠道不是「好/坏」，
+  而是「性格」——同一颗料在不同渠道的价差可达 15 倍，同一渠道对不同品类的
+  适配度也完全不同。本表只描述事实与判据，不做推荐。
+
+evidence_levels:
+  official: 厂商 / 标准组织正式文档或平台官方说明，可作硬约束
+  measured: 本仓 probe/ 下脚本实测数据，可作硬约束
+  secondary: 第三方文章转述，未回溯原始规范，只作提示
+  experience: 行业通行经验值，无单一出处，只作启发式，必须可被人工推翻
+
+# -----------------------------------------------------------------------------
+# 一、渠道清单
+# -----------------------------------------------------------------------------
+channels:
+
+  lcsc:
+    display: 立创商城
+    aliases: [szlcsc, 立创, LCSC, 立创商城]
+    kind: domestic_mall
+    evidence: measured
+    access:
+      auth_required: false
+      method: HTTP 表单 POST
+      entry_search: 'POST https://so.szlcsc.com/query/product'
+      entry_substitute: 'POST https://list.szlcsc.com/substitute/simple/list'
+      entry_detail: 'https://item.szlcsc.com/<code>.html'
+      script: 'scripts/lcsc.py'
+      proxy: 必须直连，不能走代理（lcsc.py 已内置 ProxyHandler({})）
+      notes:
+        - 唯一「免登录 + 带销量」的入口是 so.szlcsc.com/query/product
+        - 没有公开的官方价格 API；替代料的官方接口是 list.szlcsc.com
+    commercial:
+      currency: CNY
+      tax: 含税单价
+      moq: 1
+      price_tiers: true
+      price_tiers_note: 按数量取阶梯，阶梯档位由接口返回
+      invoice: 可开票
+      shipping: 顺丰/中通，按单收费
+      lead_time: 现货 1-3 天
+    capabilities:
+      structured_params: true
+      sales_signal: true
+      stock_realtime: true
+      substitute_api: true
+      substitute_score_field: simScore
+      param_range_filter: false
+      param_range_filter_note: 服务端无区间筛选（queryParameterValue 返 0 条），只能本地过滤
+      page_size_limit: 30
+      page_size_note: pageSize > 30 静默返回 0 条，会被误判成「无货」
+      multi_value_separator: '$'
+      multi_value_note: 多值分隔符是 $ 不是逗号
+    strengths:
+      - 参数结构化，适合做指标核对
+      - 有替代料接口，可自动化 D7
+      - 正品保障，MCU / 电源 / 晶振 / 连接器首选
+      - 价格显著低于海外渠道（同型号约 1/4 ~ 1/3）
+    weaknesses:
+      - 小批量单价不是最低（淘宝更便宜）
+      - 无主力议价空间
+    best_for:
+      - MCU / 主控
+      - 电源芯片（DCDC / LDO）
+      - 晶振 / 时钟
+      - 连接器
+      - 任意量的正品保障需求
+    avoid_for:
+      - 小批量比价（淘宝更低）
+      - 需要大数量阶梯价时（需人工询盘确认）
+    risk_level: low
+    commands:
+      - 'python scripts/lcsc.py search "<kw>" --sort price_asc --limit 20 --qty N --show-params'
+      - 'python scripts/lcsc.py detail <code>'
+      - 'python scripts/lcsc.py price <code> --qty N'
+      - 'python scripts/lcsc.py compare <code> [code...] --qty N'
+      - 'python scripts/lcsc.py alternate <code> --qty N --limit 10'
+    sources:
+      - research/lcsc-probe.md
+      - research/BOM-配单-调研报告.md
+
+  jlc_smt:
+    display: 嘉立创 SMT（贴片）
+    aliases: [嘉立创, JLC, JLCPCB, 贴片]
+    kind: oem_assembly
+    evidence: official
+    access:
+      auth_required: true
+      method: 网页 / EDA 插件上传 BOM
+      script: null
+      standalone_ordering: false
+      notes:
+        - 只做贴片，不单独寄料（官方明示）
+        - 立创商城的料不能随 PCB 一起寄（两套系统）
+    commercial:
+      currency: CNY
+      library_fee:
+        basic: 0
+        extended: 20
+        unit: 元/型号
+        note: 扩展库按型号数收费，基础库不收
+      moq: 1
+    capabilities:
+      bom_match_colors:
+        green: 完全匹配
+        yellow: 待确认
+        red: 无法匹配
+        rule: 红色必须人工干预
+      consign_rules:
+        priority: [自备库存, 公共库补料]
+        merge_rules:
+          - 公共库存 + Pre-Order 可合
+          - Global Sourcing + Consign 可合
+          - 其它组合不支持
+        note: 先匹配、不足再 Global Sourcing 合并
+    strengths:
+      - 一次性解决「买料 + 贴片」
+      - 基础库免费，物料归一化直接省钱
+    weaknesses:
+      - 扩展库 20 元/型号，料号多时费用可观
+      - 不支持单独寄料
+    best_for:
+      - 小批量打样 / 试产
+      - 料号少且集中在基础库的方案
+    avoid_for:
+      - 需要自己控制物料来源的场合
+      - 料号极多（扩展库费用会超过器件本身）
+    risk_level: medium
+    commands: []
+    sources:
+      - https://jlcpcb.com/help/article/how-to-use-my-own-parts-for-pcb-assembly-order
+      - https://member.jlc.com/portal/server_guide_48551.html
+      - https://www.jlc.com/portal/server_guide_19875.html
+
+  taobao:
+    display: 淘宝
+    aliases: [taobao, 淘宝网]
+    kind: retail_platform
+    evidence: measured
+    access:
+      auth_required: true
+      method: 真登录浏览器 + DOM 抽取
+      script: 'scripts/taobao.py'
+      session_flag: '--session NAME'
+      notes:
+        - 结果空白 = 登录态过期，不是反爬；必须人工扫码
+        - 销量排序是 SPA 交互，URL 参数无效，必须点「销量」tab
+        - 翻页未自动化，只覆盖当前页
+    commercial:
+      currency: CNY
+      tax: 通常不含票（可谈）
+      moq: 1
+      price_tiers: false
+      price_tiers_note: 无阶梯价字段，MOQ 只能从 qualifier="起" + SKU 名解析
+      shipping: 多数包邮
+    capabilities:
+      structured_params: false
+      sales_signal: true
+      stock_realtime: false
+      unit_normalization_required: true
+      unit_normalization_note: 标题/SKU 里有「个/只/pcs/包/盘/卷」，必须折算成元/只再比价
+    strengths:
+      - 小批量单价最低（有平台补贴 + 包邮 + 竞争激烈）
+      - 无 MOQ，凑单容易
+      - 停产料 / 冷门料常能挖到
+    weaknesses:
+      - 假货 / 翻新料风险高
+      - 销量被链接内容与运营主导，不是单规格竞争力
+      - 好评可能是刷的
+    best_for:
+      - 单型号 ≤ 10 只
+      - 单品总价 < 50 元
+      - 10 ~ 100 只的比价参考
+      - 停产 / 缺货 / 反向选型
+    avoid_for:
+      - 需要正品保证 + 发票
+      - 大批量（无阶梯价优势）
+    risk_level: high
+    commands:
+      - 'python scripts/taobao.py check'
+      - 'python scripts/taobao.py search "<kw>" --site taobao --sort sales --limit 20'
+      - 'python scripts/taobao.py search "<kw>" --site taobao --sort price_asc --limit 20'
+    sources:
+      - research/market-probe.md
+      - research/taobao-tool.md
+
+  alibaba_1688:
+    display: 1688
+    aliases: [1688, 阿里巴巴, 阿里]
+    kind: wholesale_platform
+    evidence: measured
+    access:
+      auth_required: false
+      method: URL 直拼（sortType=va_sales360&descendOrder=true）
+      script: 'scripts/taobao.py --site 1688'
+      notes:
+        - 阶梯价（1-9件 / 10-99件 …）大概率取不到，只能拿到价格区间 + 起批量
+        - 走量决策依赖阶梯价，此条必须人工询盘
+    commercial:
+      currency: CNY
+      tax: 可对公开票（需谈）
+      moq: 1
+      price_tiers: unverified
+      price_tiers_note: 3 个详情样本（含回头率 55 的 B 端链接）只给「价格区间 + 1 个起批 + 60 天老客价」
+      invoice: 可开
+    capabilities:
+      structured_params: false
+      repurchase_rate: true
+      repurchase_rate_note: 1688 用「回头率」替代销量做可信度（35% 以下慎选，45%+ 常见老牌贸易商）
+    strengths:
+      - 对公开票
+      - 起批量与阶梯价（理论上）适合走量
+      - 老牌贸易商多
+    weaknesses:
+      - 小批量单价反而比淘宝贵（「1 个起批」是挂牌价，量小不给折）
+      - 阶梯价自动化取不到
+    best_for:
+      - 单型号 ≥ 100 只
+      - 整单 ≥ 500 元
+      - 需要发票 / 对公
+    avoid_for:
+      - 小批量（比淘宝贵）
+    risk_level: medium
+    commands:
+      - 'python scripts/taobao.py search "<kw>" --site 1688 --sort price_asc --limit 20'
+    sources:
+      - research/market-probe.md
+
+  jd:
+    display: 京东自营 / 工业品
+    aliases: [jd, 京东, 京东自营]
+    kind: retail_platform
+    evidence: measured
+    access:
+      auth_required: false
+      method: 网页
+      script: null
+      notes:
+        - 价格字段名（price.value + label）与淘宝不同，实现里必须按渠道分 schema
+        - 销量排序参数未找到
+    commercial:
+      currency: CNY
+      tax: 可开票
+      moq: 1
+      price_tiers: false
+      shipping: 京东物流
+    capabilities:
+      structured_params: false
+      sales_signal: unknown
+    strengths:
+      - 正品保证
+      - 发票齐全
+      - 物流快
+    weaknesses:
+      - 价格溢价明显
+      - 裸片样本稀少（STM32F103C8T6 仅取到开发板价格）
+    best_for:
+      - 必须正品 + 要发票 + 少量
+    avoid_for:
+      - 比价（不便宜）
+    risk_level: low
+    commands: []
+    sources:
+      - research/market-probe.md
+
+  xianyu:
+    display: 闲鱼
+    aliases: [xianyu, 闲鱼, 二手]
+    kind: secondhand
+    evidence: experience
+    access:
+      auth_required: true
+      method: 网页
+      script: null
+    commercial:
+      moq: 1
+      price_tiers: false
+      invoice: 一般不提供
+    capabilities:
+      structured_params: false
+    strengths:
+      - 极少量 / 拆机件
+    weaknesses:
+      - 无质量保证
+      - 无法开票
+    best_for:
+      - 个人实验 / 非关键件
+    avoid_for:
+      - 任何量产 / 认证相关
+    risk_level: high
+    commands: []
+    sources: []
+
+  authorized_distributor:
+    display: 授权代理（艾睿 / E络盟 / 贸泽 / 云汉芯城）
+    aliases: [arrow, element14, mouser, 云汉芯城, 授权代理]
+    kind: overseas_distributor
+    evidence: measured
+    access:
+      auth_required: false
+      method: 网页 / API
+      script: 'scripts/distributor.py'
+      sites: [mouser, digikey]
+      notes:
+        - 需要能访问境外站点（本机走 127.0.0.1:7890 代理）
+    commercial:
+      currency: [USD, CNY]
+      tax: 不含税，另计关税与运费
+      moq: 1
+      price_tiers: true
+    capabilities:
+      structured_params: true
+      stock_realtime: true
+    strengths:
+      - 原厂正品
+      - 交期与批次可追溯
+    weaknesses:
+      - 价格显著高于立创（同型号约 3-4 倍）
+    best_for:
+      - 立创无货的关键料
+      - 需要原厂批次追溯
+    avoid_for:
+      - 通用阻容（价差过大）
+    risk_level: low
+    commands:
+      - 'python scripts/distributor.py check'
+      - 'python scripts/distributor.py search "<kw>" --site both --limit 5'
+    sources:
+      - research/BOM-配单-调研报告.md
+
+  oem:
+    display: 原厂 / 原厂代理
+    aliases: [原厂, 直供, OEM]
+    kind: manufacturer
+    evidence: experience
+    access:
+      auth_required: true
+      method: 人工询盘
+      script: null
+    commercial:
+      moq: 高
+      price_tiers: true
+    capabilities:
+      structured_params: true
+    strengths:
+      - 价格最低（量大）
+      - 技术支持
+    weaknesses:
+      - 有起订量
+      - 交期长
+    best_for:
+      - 量产
+    avoid_for:
+      - 打样 / 小批量
+    risk_level: low
+    commands: []
+    sources: []
+
+# -----------------------------------------------------------------------------
+# 二、渠道选择规则（按顺序匹配，第一条命中即推荐）
+# -----------------------------------------------------------------------------
+channel_selection:
+  currency: CNY
+  evidence: measured
+  rules:
+    - id: R01
+      when: 'qty <= 10 or line_total < 50'
+      recommend: taobao
+      reason: 无 MOQ、包邮、单价最低，凑单容易
+    - id: R02
+      when: '10 < qty < 100'
+      recommend: [taobao, alibaba_1688]
+      reason: 两边都要看；淘宝仍可能更便宜，1688 需确认阶梯价是否存在
+    - id: R03
+      when: 'qty >= 100 or order_total >= 500'
+      recommend: alibaba_1688
+      anchor: lcsc
+      reason: 起批量与对公开票才有意义；阶梯单价自动化取不到，需人工询盘确认
+    - id: R04
+      when: 'need_genuine and need_invoice and qty <= 10'
+      recommend: jd
+      fallback: lcsc
+      reason: 好评率 / 物流 / 发票齐全，价格溢价可接受
+    - id: R05
+      when: 'family in [mcu, ldo, dcdc, crystal_oscillator, connector_*]'
+      recommend: lcsc
+      reason: 正品保障 + 参数结构化，与数量无关
+    - id: R06
+      when: 'status == eol or stock == 0'
+      recommend: [taobao, alibaba_1688]
+      reason: 按同封装同参数反向选型，靠销量热度找在产替代
+      then: 'lcsc 做参数核对'
+
+  # 实测价差（同型号 STM32F103C8T6 裸片）
+  price_spread_observed:
+    evidence: measured
+    sampled_at: '2026-11-05'
+    data:
+      taobao: '¥1.02 / ¥1.45 / ¥6.71 / ¥11.22（1 件起，无 MOQ）'
+      alibaba_1688: '¥4.00 / ¥5.15 / ¥6.80（1 个起批或 N PCS 起批）'
+      jd: '¥7.04（补贴到手价，开发板）/ ¥135 套件；裸片无有效样本'
+    conclusion: 小批量时淘宝比 1688 更便宜（反直觉但可复现）
+
+  # 同规格不同品牌的价差 —— 品牌是最安全的降本维度
+  brand_spread_observed:
+    evidence: measured
+    data:
+      SS34: '15x'
+      '1N4007': '7x'
+      AMS1117: '5x'
+      AO3400A: '3.2x'
+    conclusion: 同规格换品牌是最安全、最有效的降本手段
+
+  # 立创 vs 海外
+  lcsc_vs_overseas:
+    evidence: measured
+    example: TPS259472ARPWR
+    data:
+      lcsc: '¥3.38 @1000'
+      mouser: '¥11.38 @25'
+      digikey: '¥17.43 @1'
+    conclusion: 立创约为海外渠道的 1/4 ~ 1/3
+
+  # 销量信号有效性（重要：不要迷信销量）
+  sales_signal_validity:
+    evidence: measured
+    spearman_price_vs_sales:
+      STM32F103C8T6: 0.092
+      '0805 10K 1% 电阻': -0.314
+      NE555: -0.072
+      'Type-C 16P 母座': 0.078
+    conclusion: |-
+      价格与销量基本不相关（|ρ| ≤ 0.32）。销量被「链接内容」（一个链接覆盖几十个规格）
+      和广告运营主导，不是单规格竞争力。且 STM32 销量前 3 名全是开发板/套件。
+      因此：销量只能当 tie-breaker，不能当主判据。
+    judge_order: [规格匹配, 单位归一后的单价, 销量或回头率, 店铺类型]
+
+# -----------------------------------------------------------------------------
+# 三、已知限制（说「不知道」比编一个数安全）
+# -----------------------------------------------------------------------------
+limitations:
+  - id: L01
+    item: 1688 阶梯价
+    status: unverified
+    detail: 3 个详情样本（含回头率 55 的 B 端链接）只给价格区间 + 起批量，正则扫全文无 N-M 件台阶
+    action: 标「阶梯价未验证」+ 人工询盘
+  - id: L02
+    item: 京东销量排序
+    status: unknown
+    detail: 未找到排序参数；翻页 / 并发 / 登录态过期行为未测
+    action: 只做价格锚点，不做销量排序
+  - id: L03
+    item: 淘宝翻页
+    status: unverified
+    detail: 只覆盖当前搜索结果页，不自动翻页
+    action: 结果里注明页数
+  - id: L04
+    item: 淘宝登录态
+    status: known_risk
+    detail: 长期运行的主要单点故障；过期后表现为空白 + params 完整
+    action: 空白直接判「需登录」返回上层，不重试
+  - id: L05
+    item: 验证码 / 滑块
+    status: unknown
+    detail: 40+ 次请求内未触发，阈值未知
+    action: 一旦出现必须人工过，不要在自动流程里硬刚
+  - id: L06
+    item: 价格时效
+    status: known_risk
+    detail: 淘宝卡片价是「起价 + 补贴后」，1688 有「60 天老客价」「活动价」
+    action: 比价结论只在采集时刻有效，必须落盘带时间戳
+  - id: L07
+    item: SKU 与型号映射
+    status: known_risk
+    detail: 一条链接覆盖 6P/16P/24P、0603/0805/1206 是常态，只能靠 SKU 名文本匹配
+    action: 标注错配风险
+  - id: L08
+    item: 立创参数区间筛选
+    status: unsupported
+    detail: queryParameterValue 返 0 条，服务端无区间筛选
+    action: 本地过滤
+  - id: L09
+    item: 立创 pageSize
+    status: known_risk
+    detail: pageSize > 30 静默返 0
+    action: 分页或减小 limit，不要用大 limit 判「无货」
+  - id: L10
+    item: 渠道组合
+    status: official
+    detail: 公共库存 + Pre-Order 可合；Global Sourcing + Consign 可合；其它组合不支持
+    action: 按官方组合拆分
+
+# -----------------------------------------------------------------------------
+# 四、平台规则（官方口径，硬约束）
+# -----------------------------------------------------------------------------
+platform_rules:
+  - id: P01
+    rule: 只做贴片，不单独寄料
+    source: https://jlcpcb.com/help/article/how-to-use-my-own-parts-for-pcb-assembly-order
+  - id: P02
+    rule: 立创商城 ≠ 嘉立创 SMT，两套库存/价格系统，商城料不能随 PCB 寄
+    source: research/cn-knowledge.md
+  - id: P03
+    rule: 手动配单输入格式为「值 + 空格 + 参数」（如 10K 5% / 100PF 10V），用别的符号可能找不出来
+    source: https://www.jlc.com/portal/server_guide_19875.html
+  - id: P04
+    rule: 扩展库按型号数收 20 元/型号换料费，基础库不收
+    source: research/cn-knowledge.md
+  - id: P05
+    rule: 立创 BOM 配单三色 —— 绿=完全匹配 / 黄=待确认 / 红=无法匹配；红色必须人工干预
+    source: research/cn-knowledge.md
+
+sources:
+  - research/market-probe.md
+  - research/lcsc-probe.md
+  - research/cn-knowledge.md
+  - research/BOM-配单-调研报告.md
+  - research/methodology-survey.md
+  - https://jlcpcb.com/help/article/how-to-use-my-own-parts-for-pcb-assembly-order
+  - https://member.jlc.com/portal/server_guide_48551.html
+  - https://www.jlc.com/portal/server_guide_19875.html

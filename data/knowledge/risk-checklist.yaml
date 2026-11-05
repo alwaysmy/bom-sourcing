@@ -1,0 +1,591 @@
+# =============================================================================
+# 风险清单 —— 配单 / 选料的风险知识库（机读版）
+#
+# 用途：agent 在 D6「风险复核」步骤逐条过本表。
+# 用法：
+#   blocker 命中 → 停止自动化，把问题抛回用户（见 must_ask_human）
+#   major   命中 → 输出里必须列出，并给规避动作
+#   minor   命中 → 记一行「已复核」，继续
+# 人读版：references/methodology.md §8 / §12
+#
+# 严重度定义：
+#   blocker  会导致整板报废 / 安全事故 / 认证失效 / 返工超预算 → 必须停
+#   major    会导致功能异常 / 批量翻车 / 明显超支 → 必须报告 + 给动作
+#   minor    会造成返工 / 少量浪费 → 记录即可
+# =============================================================================
+
+schema: bom-sourcing/knowledge/risk-checklist
+version: 1
+generated: '2026-11-05'
+locale: zh-CN
+
+purpose: >-
+  把「配单会怎么翻车」从口口相传变成可逐条核对的清单。每条都带「现象 → 判据 →
+  怎么检测 → 怎么规避」。清单不是用来吓人的，是用来在 D6 步骤做一次机械复核的。
+
+evidence_levels:
+  official: 厂商 / 标准组织正式文档或平台官方说明，可作硬约束
+  measured: 本仓 probe/ 下脚本实测数据，可作硬约束
+  secondary: 第三方文章转述，只作提示
+  experience: 行业通行经验值，只作启发式
+
+severity_levels:
+  blocker: 整板报废 / 安全事故 / 认证失效 / 返工超预算 —— 必须停下来问人
+  major: 功能异常 / 批量翻车 / 明显超支 —— 必须报告并给规避动作
+  minor: 返工 / 少量浪费 —— 记录即可
+
+# -----------------------------------------------------------------------------
+# 一、风险清单
+# -----------------------------------------------------------------------------
+risks:
+
+  # ===== A. BOM 数据类 =====
+  - id: R001
+    name: 型号写错一个字母
+    category: bom_data
+    stage: [D0, D1]
+    severity: blocker
+    evidence: experience
+    symptom: 整板报废，焊上去才发现不是这个芯片
+    example: STM32F103C8T6 vs STM32F103C6T6（Flash 64K vs 128K）
+    criterion: 型号必须逐字符核对；同系列不同后缀（C6/C8、T6/T7）必须单独确认
+    detect:
+      auto: partial
+      method: 用型号精确检索，检查返回结果的型号与输入完全一致
+      command: 'python scripts/lcsc.py search "<型号>" --limit 5'
+    action: 输出里原样回显型号，并要求用户确认后缀
+    sources: [research/cn-knowledge.md]
+
+  - id: R002
+    name: 封装脚数不一致
+    category: bom_data
+    stage: [D1, D4]
+    severity: blocker
+    evidence: experience
+    symptom: 焊盘对不上，飞线或改板
+    example: SOT-23（3 脚）vs SOT-23-5（5 脚）
+    criterion: 封装名必须带脚数；只有 SOT-23 / SOP 这类过粗描述时只提示不淘汰
+    detect:
+      auto: true
+      method: 比对 BOM 封装列与商品页封装，走封装别名表
+      command: 'python scripts/spec.py'
+    action: 封装名缺脚数时要求补全
+    sources: [research/cn-knowledge.md, references/spec-check.md]
+
+  - id: R003
+    name: 位号缺失 / 重复
+    category: bom_data
+    stage: [D0]
+    severity: major
+    evidence: experience
+    symptom: 贴片漏贴 / 重复贴
+    criterion: 位号集合与坐标文件差集必须为空；位号不可重复
+    detect:
+      auto: true
+      method: 解析 BOM 位号列，做集合差与重复检查
+      command: 'python scripts/bom.py <bom> --columns'
+    action: 列出缺失 / 重复的位号
+    sources: [research/cn-knowledge.md]
+
+  - id: R004
+    name: 单位写错差数量级
+    category: bom_data
+    stage: [D0, D1]
+    severity: blocker
+    evidence: experience
+    symptom: 买了 1000 倍的量，或买成完全不同的器件
+    example: '10uF 写成 10nF；10K 写成 10R'
+    criterion: 单位必须有量级（u/n/p/k/M），且与封装/耐压匹配
+    detect:
+      auto: true
+      method: 单位量级检查 + 与同 family 常见值域比对
+      command: 'python scripts/spec.py'
+    action: 值域外直接报警
+    sources: [research/cn-knowledge.md]
+
+  # ===== B. 参数类 =====
+  - id: R010
+    name: 参数未带测试条件
+    category: spec
+    stage: [D4]
+    severity: major
+    evidence: measured
+    symptom: 参数「满足」但实际工作点不对
+    example: AO3400A 48mΩ@Vgs2.5V vs 17mΩ@Vgs10V（2.8 倍）；LM393 300ns(onsemi) vs 1.3µs(ST)（4.3 倍）
+    criterion: 任何参数比较都必须带测试条件；条件不同的数字不可直接比
+    detect:
+      auto: partial
+      method: 解析商品页参数，取出 @条件
+      command: 'python scripts/lcsc.py detail <code>'
+    action: 条件缺失时标 ?
+    sources: [references/spec-check.md]
+
+  - id: R011
+    name: 绝对最大值当工作值
+    category: spec
+    stage: [D4]
+    severity: blocker
+    evidence: official
+    symptom: 常温测试通过，批量后烧毁
+    criterion: 所有参数必须按降额表打折（见 industry-norms.yaml derating）
+    example: 30V Vds 用在 24V 系统，瞬态常到 40V+
+    detect:
+      auto: true
+      method: 按 derating 表逐条算最大允许值
+      command: 'python scripts/spec.py'
+    action: 超降额限值直接 ✘
+    sources: [https://pcbsync.com/component-derating-guidelines/, https://yunxuan.blog.csdn.net/article/details/169935648]
+
+  - id: R012
+    name: MLCC 直流偏压容值损失
+    category: hidden_stress
+    stage: [D4]
+    severity: blocker
+    evidence: official
+    symptom: 标称 10µF 实际只有 1.5µF，纹波超标 / 复位
+    example: 0402 10µF/6.3V X5R 在 5V 下只剩约 1.5µF（−85%）
+    criterion: 电源轨上 Class II MLCC 额定电压 ≥ 2× 工作电压
+    detect:
+      auto: partial
+      method: 检查 family=capacitor_mlcc 且介质为 X5R/X7R 且用于电源轨的器件
+      command: manual
+    action: 电压档不够时强制升档（6.3V → 16V/25V）
+    sources:
+      - https://pcbsync.com/component-derating-guidelines/
+      - data/knowledge/industry-norms.yaml
+
+  - id: R013
+    name: 缺货换料后不重跑降额
+    category: spec
+    stage: [D7]
+    severity: major
+    evidence: official
+    symptom: 换的料参数「看着一样」，但工作点变了
+    criterion: 任何换料都必须回到 D4 重跑完整降额
+    detect:
+      auto: false
+      method: 流程约束
+      command: 'python scripts/lcsc.py compare <old> <new> --qty N'
+    action: 换料必附对比结论
+    sources: [https://pcbsync.com/component-derating-guidelines/]
+
+  - id: R014
+    name: 全面过度降额
+    category: spec
+    stage: [D4]
+    severity: minor
+    evidence: official
+    symptom: 用了大两号的封装，成本上升且更易弯曲开裂
+    criterion: 降额是定值判据，不是越大越安全
+    detect:
+      auto: false
+      method: 检查余量是否显著大于表值（如 >2× 降额限值）
+      command: manual
+    action: 提示「过度降额」，但不阻断
+    sources: [https://pcbsync.com/component-derating-guidelines/]
+
+  # ===== C. 替代料类 =====
+  - id: R020
+    name: 替代料未标注导致停工
+    category: substitute
+    stage: [D7]
+    severity: blocker
+    evidence: experience
+    symptom: 贴片厂按 BOM 采购，替代料没写清，停线等料
+    criterion: 替代料必须在 BOM 备注列显式标注「可替 <型号>」
+    detect:
+      auto: true
+      method: 检查 --alternate 输出的替代料是否有落盘
+      command: 'python scripts/bom.py <bom> --alternate --alt-limit 3'
+    action: 输出里必须有「替代料」列
+    sources: [research/cn-knowledge.md]
+
+  - id: R021
+    name: simScore 高当成可直接替换
+    category: substitute
+    stage: [D7]
+    severity: major
+    evidence: secondary
+    symptom: 参数接近但 FFF 不等价（封装/引脚/软件不兼容）
+    criterion: simScore 只表示「相似」，替代必须逐项列出 delta（哪里不一样）
+    detect:
+      auto: true
+      method: 对替代料跑完整 D4 核对，不用 simScore 直接判
+      command: 'python scripts/lcsc.py compare <orig> <alt> --qty N'
+    action: simScore 只做排序，不做裁决
+    sources: [https://crystal-display.com/download/104219/]
+
+  - id: R022
+    name: 硬凑替代品
+    category: substitute
+    stage: [D7]
+    severity: blocker
+    evidence: experience
+    symptom: 用了「参数勉强够」的料，功能异常或寿命骤降
+    criterion: 参数无法匹配时，「建议改设计」是合法结论；不要推荐勉强能用的
+    example: 锗管 1N34 等老器件已全面 EOL，没有真正等价的替代
+    detect:
+      auto: false
+      method: 人工判断
+      command: null
+    action: 输出「无可用替代」+ 改板成本对比
+    sources: [https://twiar.net/2024/05/31/via-hackaday-how-do-you-fill-the-1n34-void/]
+
+  - id: R023
+    name: 替代了不可替代类器件
+    category: substitute
+    stage: [D7]
+    severity: blocker
+    evidence: experience
+    symptom: 认证失效 / 通信不上 / 程序不兼容
+    criterion: 三类器件一律原型号 —— ①安全/认证（安规 X/Y 电容、隔离器件、保险丝）②定时/时钟基准（晶振、基准源）③固件绑定（MCU/Flash/EEPROM）
+    detect:
+      auto: true
+      method: 检查 family 是否落在不可替代列表
+      command: manual
+    action: 命中即 blocker
+    sources: [research/cn-knowledge.md]
+
+  - id: R024
+    name: 电容替代换了介质材质
+    category: substitute
+    stage: [D7]
+    severity: major
+    evidence: experience
+    symptom: 容值温漂 / 容量衰减，滤波失效
+    criterion: 电容可替代，但必须同介质材质（X7R / X5R / C0G 不可互换）
+    detect:
+      auto: partial
+      method: 比对商品页介质字段
+      command: 'python scripts/lcsc.py detail <code>'
+    action: 介质不同直接 ✘
+    sources: [research/cn-knowledge.md]
+
+  # ===== D. 假货 / 翻新类 =====
+  - id: R030
+    name: 打磨翻新料
+    category: counterfeit
+    stage: [D9]
+    severity: blocker
+    evidence: experience
+    symptom: 短期能用，长期失效；批量不良
+    criterion: 七条外观法 —— 打磨痕迹 / 引脚光亮 / 印字锯齿 / 日期混乱 / 边沿直角 vs r 角 / 定位孔深浅不一 / 包装差异
+    extra: 丝印用稀释剂能擦掉 = 假
+    detect:
+      auto: false
+      method: 人工目检 + 稀释剂测试
+      command: null
+    action: 停止使用，退货
+    sources: [research/cn-knowledge.md]
+
+  - id: R031
+    name: 散新料 = 拆机翻新
+    category: counterfeit
+    stage: [D9]
+    severity: major
+    evidence: experience
+    symptom: 国产 32 位 MCU 翻新件不良率 10%–40%
+    criterion: 「散新」「拆机」「原装拆机」一律按翻新件对待；UID 辅助判断
+    detect:
+      auto: false
+      method: 读 UID / 批次码
+      command: null
+    action: 关键件不接散新
+    sources: [research/cn-knowledge.md]
+
+  - id: R032
+    name: 淘宝好评是刷的
+    category: counterfeit
+    stage: [D5]
+    severity: minor
+    evidence: measured
+    symptom: 好评率高但货不对
+    criterion: 好评 / 销量只能当 tie-breaker；1688 用回头率（35% 以下慎选，45%+ 常见老牌贸易商）
+    detect:
+      auto: false
+      method: 看店铺类型 + 单价异常
+      command: 'python scripts/taobao.py search "<kw>" --site taobao --sort sales --limit 20'
+    action: 不把好评当质量证据
+    sources: [research/market-probe.md]
+
+  # ===== E. 数量 / 损耗类 =====
+  - id: R040
+    name: 损耗没算
+    category: quantity
+    stage: [D5]
+    severity: major
+    evidence: experience
+    symptom: 少买，二次下单，运费比料贵
+    criterion: 阻容 0402+ 0.3%–0.5%（每款 +5~10 颗）；0201 0.5%–1.0%（+10~20 颗）；BGA/QFN/IC 零损耗；连接器异形件 0.5%–2.0%
+    detect:
+      auto: true
+      method: bom.py order_qty() 按损耗模型
+      command: 'python scripts/bom.py <bom> --qty N'
+    action: 报价单必须给「实际采购量」列
+    sources: [research/cn-knowledge.md, data/knowledge/industry-norms.yaml]
+
+  - id: R041
+    name: 忘记换料费
+    category: cost
+    stage: [D5]
+    severity: major
+    evidence: official
+    symptom: 报价偏低，实际多花几百
+    criterion: 嘉立创扩展库 20 元/型号，基础库不收
+    detect:
+      auto: false
+      method: 数 BOM 里有多少扩展库料号
+      command: manual
+    action: 报价单加「物料归一化成本」行
+    sources: [research/cn-knowledge.md]
+
+  # ===== F. 生命周期类 =====
+  - id: R050
+    name: 停产 / EOL 未识别
+    category: lifecycle
+    stage: [D6]
+    severity: blocker
+    evidence: secondary
+    symptom: 打样能买到，量产断供
+    criterion: ✘ 必须区分「暂时缺货」与「已 EOL」；EOL 时给 LTB 数量与 90 天倒计时
+    detect:
+      auto: partial
+      method: 商品页生命周期字段 + 询价
+      command: 'python scripts/lcsc.py detail <code>'
+    action: EOL 走 LTB 决策
+    sources:
+      - https://resources.pcb.cadence.com/component-information-portal-cip/col/component-information-portal-cip/when-your-component-is-unavailable-alternates-last-buys-and-counterfeits
+
+  - id: R051
+    name: LTB 囤料本身是风险
+    category: lifecycle
+    stage: [D6]
+    severity: major
+    evidence: secondary
+    symptom: 囤了一堆料，存储条件不可信，上机全是坏的
+    criterion: LTB 只在「需求与衰减不确定度可界定、且存储条件可信」时才合理
+    detect:
+      auto: false
+      method: 人工确认存储条件（干燥柜 / 温湿度）
+      command: null
+    action: 存储条件不可信时不要 LTB
+    sources: [https://crystal-display.com/download/104219/]
+
+  # ===== G. 流程 / 时机类 =====
+  - id: R060
+    name: 进入贴片阶段才改 BOM
+    category: process
+    stage: [D8]
+    severity: blocker
+    evidence: experience
+    symptom: 停机换料 + 混料，成本剧增
+    criterion: BOM 变更窗口 —— 工程资料阶段（成本最低）→ 采购阶段 → 贴片阶段（停机换料 + 混料）→ 焊完（BGA/QFN 报废）；进入贴片不再改 BOM
+    detect:
+      auto: false
+      method: 流程约束
+      command: null
+    action: 贴片阶段任何改料都必须显式告警
+    sources: [research/cn-knowledge.md]
+
+  - id: R061
+    name: 样机全过，量产全挂
+    category: process
+    stage: [D7]
+    severity: major
+    evidence: experience
+    symptom: 10 片全好，1000 片批量不良
+    criterion: 替代料必须先产 10–20 片验证；批次一致性要单独看
+    detect:
+      auto: false
+      method: 流程约束
+      command: null
+    action: 替代料必须先小批
+    sources: [research/cn-knowledge.md]
+
+  - id: R062
+    name: 商城料不能随 PCB 寄
+    category: process
+    stage: [D8]
+    severity: major
+    evidence: official
+    symptom: 以为买了料就能一起贴，结果要自己寄
+    criterion: 立创商城 ≠ 嘉立创 SMT，两套系统；只做贴片，不单独寄料
+    detect:
+      auto: false
+      method: 流程约束
+      command: null
+    action: 明确告知渠道边界
+    sources:
+      - https://jlcpcb.com/help/article/how-to-use-my-own-parts-for-pcb-assembly-order
+      - research/cn-knowledge.md
+
+  - id: R063
+    name: 不支持的渠道组合
+    category: process
+    stage: [D8]
+    severity: major
+    evidence: official
+    symptom: 下单失败，需要重新拆单
+    criterion: 公共库存 + Pre-Order 可合；Global Sourcing + Consign 可合；其它组合不支持
+    detect:
+      auto: false
+      method: 流程约束
+      command: null
+    action: 按官方组合拆分
+    sources: [https://jlcpcb.com/help/article/how-to-use-my-own-parts-for-pcb-assembly-order]
+
+  # ===== H. 数据 / 工具类 =====
+  - id: R070
+    name: 把「接口返 0 条」当成「无货」
+    category: tooling
+    stage: [D3]
+    severity: major
+    evidence: measured
+    symptom: 误报停产，实际有货
+    criterion: 立创 pageSize > 30 静默返 0；必须先排除「分页参数错」再判定无货
+    detect:
+      auto: true
+      method: 检查 limit 与返回条数
+      command: 'python scripts/lcsc.py search "<kw>" --limit 30'
+    action: 分页或减小 limit 重试
+    sources: [research/lcsc-probe.md]
+
+  - id: R071
+    name: 拿 A 渠道价格比 B 渠道库存
+    category: tooling
+    stage: [D5]
+    severity: major
+    evidence: experience
+    symptom: 结论错配（淘宝的价 + 立创的库存）
+    criterion: part（器件抽象）与 supplier-item（渠道报价）必须分开；比价只在同规格的 supplier-item 之间做
+    detect:
+      auto: false
+      method: 数据模型约束
+      command: null
+    action: 输出里必须标渠道
+    sources: [https://docs.inventree.org/en/stable/]
+
+  - id: R072
+    name: 价格当成长期有效
+    category: tooling
+    stage: [D8]
+    severity: minor
+    evidence: measured
+    symptom: 三天后价格变了，结论作废
+    criterion: 价格是瞬时快照，比价结论只在采集时刻有效
+    detect:
+      auto: true
+      method: 落盘带时间戳
+      command: 'python scripts/bom.py <bom> --json <带时间戳的路径>'
+    action: 报价单必须写取价时间
+    sources: [research/market-probe.md]
+
+# -----------------------------------------------------------------------------
+# 二、必须停下来问人的硬门（methodology.md §12 的机读版）
+# -----------------------------------------------------------------------------
+must_ask_human:
+  - id: G01
+    trigger: 需求里抽不出任何定量参数
+    why: 无法检索，猜必错
+  - id: G02
+    trigger: family 未收录且 --allow-unknown 结果不确定
+    why: 参数表可能不适用
+  - id: G03
+    trigger: conditional_critical 被触发但缺值
+    why: 关键指标无法核对
+  - id: G04
+    trigger: 任一关键项 ✘ 且无替代
+    why: 原方案不可行
+  - id: G05
+    trigger: 命中 severity=blocker 的风险项
+    why: 可能造成安全事故
+  - id: G06
+    trigger: 涉及安规 / 认证 / 隔离 / 保险丝的替代
+    why: 认证失效，产品不能卖
+  - id: G07
+    trigger: 涉及定时/时钟基准 或 固件绑定器件的替代
+    why: 功能不兼容，需要重新开发
+  - id: G08
+    trigger: 发现已 EOL / LTB 且剩余需求不明
+    why: 无法定 LTB 数量
+  - id: G09
+    trigger: 报价单出现红色行（无法匹配）
+    why: 官方要求人工干预
+  - id: G10
+    trigger: 整单 ≥500 元且需 1688 阶梯价
+    why: 阶梯价自动化取不到，必须人工询盘
+  - id: G11
+    trigger: 淘宝 / 1688 结果空白
+    why: 登录态过期，需人工扫码
+  - id: G12
+    trigger: 用户要求的渠道组合平台不支持
+    why: 下单会失败
+
+# -----------------------------------------------------------------------------
+# 三、不可替代类（硬红线）
+# -----------------------------------------------------------------------------
+irreplaceable:
+  note: 这三类器件参数一样也不等于可替换。看到「参数全 ✔ 所以可以替」的想法要立刻打住。
+  categories:
+    - id: I01
+      name: 安全 / 认证相关
+      examples: [安规 X 电容, 安规 Y 电容, 隔离器件, 光耦隔离, 保险丝]
+      why: 认证失效，产品不能卖
+    - id: I02
+      name: 定时 / 时钟基准
+      examples: [晶振, 晶振振荡器, 电压基准源]
+      why: 频率/电压偏移会导致通信不上或精度不达标
+    - id: I03
+      name: 固件绑定器件
+      examples: [MCU, Flash, EEPROM]
+      why: 程序不兼容，需要重新开发与验证
+
+# -----------------------------------------------------------------------------
+# 四、替代料风险分档
+# -----------------------------------------------------------------------------
+substitute_risk_tiers:
+  evidence: experience
+  high:
+    label: 高（不建议替）
+    families: [mcu, ldo, dcdc, crystal_oscillator, connector_header, connector_usb, connector_terminal]
+    verification: [完整功能测试, EMC, 满载 + 温升, 实测频率 + 起振, 插拔 + 接触电阻]
+  medium:
+    label: 中（谨慎替）
+    families: [mosfet, opamp, comparator, memory]
+    verification: [温升, 信号完整性, 读写测试]
+  low:
+    label: 低（可替）
+    families: [resistor, capacitor_mlcc, diode_rectifier, diode_schottky, led]
+    constraint: 电容必须同介质材质（X7R / X5R / C0G 不可互换）
+
+# -----------------------------------------------------------------------------
+# 五、替代料验证四步法
+# -----------------------------------------------------------------------------
+substitute_validation:
+  evidence: experience
+  steps:
+    - order: 1
+      name: 参数对比
+      criterion: 偏差 > 10% 谨慎；< 5% 可接受
+    - order: 2
+      name: 功能测试
+      criterion: 关键指标偏差 < 5%
+    - order: 3
+      name: 可靠性
+      criterion: 高低温 −20~70℃；老化 85℃ × 168h（或 48h）；电气参数漂移 < 5%
+    - order: 4
+      name: 批量验证
+      criterion: 先产 10–20 片
+  report_retention: 至少 2 年（汽车电子 15 年+）
+
+sources:
+  - research/cn-knowledge.md
+  - research/market-probe.md
+  - research/lcsc-probe.md
+  - research/spec-rules.md
+  - research/methodology-survey.md
+  - https://pcbsync.com/component-derating-guidelines/
+  - https://resources.pcb.cadence.com/component-information-portal-cip/col/component-information-portal-cip/when-your-component-is-unavailable-alternates-last-buys-and-counterfeits
+  - https://crystal-display.com/download/104219/
+  - https://twiar.net/2024/05/31/via-hackaday-how-do-you-fill-the-1n34-void/
+  - https://jlcpcb.com/help/article/how-to-use-my-own-parts-for-pcb-assembly-order

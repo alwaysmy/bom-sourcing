@@ -213,6 +213,94 @@ def detect_family(*texts):
     return "unknown"
 
 
+# 功能符合性：立创的 catalog 归类很粗——DC-DC 降压转换器也会挂在「功率电子开关」下，
+# 「电子保险丝」有的料 type 写「功率电子开关」、有的写「浪涌保护器」。
+# 参数满足 ≠ 功能对：MP4316GRE-Z（45V/6A 同步降压转换器）能通过「工作电压/最大连续电流」筛选，
+# 但它根本不是负载开关。所以最后必须用 productName 的正/反向关键词再判一次。
+# 数据源：data/categories.yaml 每个 family 的 function_keywords / exclude_keywords；
+# 这里只是「没有 YAML 时」的内置兜底，**以 YAML 为准**。
+FUNCTION_FALLBACK = {
+    "load_switch": (
+        ["负载开关", "电子保险丝", "efuse", "过压保护", "热插拔", "hot swap", "hotswap",
+         "限流开关", "理想二极管", "load switch", "浪涌保护", "hot-swap"],
+        ["降压转换器", "降压", "升压", "dc-dc", "dcdc", "ldo", "稳压器", "充电管理",
+         "电池管理", "转换器", "驱动芯片"],
+    ),
+    "ldo": (
+        ["ldo", "线性稳压", "低压差"],
+        ["降压转换器", "dc-dc", "升压", "开关稳压", "充电管理"],
+    ),
+    "dcdc": (
+        ["dc-dc", "dcdc", "降压转换器", "升压转换器", "开关稳压", "buck", "boost"],
+        ["ldo", "线性稳压", "负载开关", "电子保险丝"],
+    ),
+    "mosfet": (
+        ["mosfet", "mos", "场效应", "n沟道", "p沟道", "n-channel", "p-channel"],
+        ["三极管", "bjt", "二极管", "驱动芯片"],
+    ),
+    "bjt": (
+        ["三极管", "bjt", "晶体管", "达林顿"],
+        ["mosfet", "场效应", "二极管"],
+    ),
+    "tvs": (
+        ["tvs", "瞬态", "浪涌抑制", "esd"],
+        ["稳压二极管", "肖特基", "整流"],
+    ),
+    "diode": (
+        ["二极管", "整流", "开关二极管", "快恢复"],
+        ["tvs", "瞬态抑制", "稳压二极管", "mosfet", "三极管"],
+    ),
+    "schottky": (
+        ["肖特基", "schottky"],
+        ["tvs", "稳压二极管", "mosfet"],
+    ),
+    "crystal": (
+        ["晶振", "晶体", "谐振器", "crystal", "resonator"],
+        ["振荡器", "oscillator", "tcxo", "有源"],
+    ),
+    "oscillator": (
+        ["振荡器", "oscillator", "有源晶振", "tcxo"],
+        ["晶振", "晶体", "无源"],
+    ),
+}
+
+
+def _norm_text(s):
+    return re.sub(r"[\s\-_/]+", "", str(s or "")).lower()
+
+
+def function_check(name, positive=(), negative=(), family=None):
+    """功能符合性检查：用商品名判定「这到底是不是我要的那类器件」。
+
+    返回 (verdict, pos_hits, neg_hits, reason)：
+      ok        正向命中且无反向 → 功能对
+      mismatch  只命中反向        → 功能不符（参数再好也不能用）
+      conflict  正反都命中        → 名称歧义，必须人工/查手册
+      unknown   都没命中          → 无法判定（名称只有型号的料很常见，如 HS2950P.M）
+    """
+    if not positive and not negative and family:
+        positive, negative = FUNCTION_FALLBACK.get(family, ((), ()))
+    blob = _norm_text(name)
+    if not blob:
+        return "unknown", [], [], "没有商品名，无法判定功能"
+    pos = [k for k in positive if _norm_text(k) and _norm_text(k) in blob]
+    neg = [k for k in negative if _norm_text(k) and _norm_text(k) in blob]
+    if pos and neg:
+        # 正反都命中：谁更"具体"听谁的。「集成TVS的28V/5A过压保护开关」——TVS 是它集成的功能，
+        # 器件本身是过压保护开关；而「同步降压转换器」不会同时出现「负载开关」这种正向词。
+        p_best, n_best = max(pos, key=len), max(neg, key=len)
+        if len(_norm_text(p_best)) > len(_norm_text(n_best)):
+            return "ok", pos, neg, f"命中「{p_best}」（同时提到「{n_best}」，属集成的保护功能）"
+        if len(_norm_text(p_best)) < len(_norm_text(n_best)):
+            return "mismatch", pos, neg, f"命中排除词「{n_best}」——不是目标功能"
+        return "conflict", pos, neg, f"名称同时含「{p_best}」与「{n_best}」，功能有歧义"
+    if pos:
+        return "ok", pos, neg, f"命中「{pos[0]}」"
+    if neg:
+        return "mismatch", pos, neg, f"命中排除词「{neg[0]}」——不是目标功能"
+    return "unknown", pos, neg, "商品名里没有功能描述（只有型号），需查手册或原厂页面"
+
+
 def extract_params(params):
     """把立创 paramLinkedMap 转成 {物理量: 数值/文本}。"""
     out = {}

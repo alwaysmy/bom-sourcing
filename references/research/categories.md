@@ -290,3 +290,182 @@ python probe_catalog_verify.py        # ~5 请求
 - `_discover_stdout.txt` / `_params_stdout.txt` / `_verify_stdout.txt`（运行时控制台输出）
 
 历史探针文件（`probe_catalog2.py` / `probe_catalog3.py` 等）保持原样未改动。
+
+---
+
+## 8. 功能符合性判据（`function_keywords` / `exclude_keywords`）
+
+> 本节回答一个问题：**`catalogIdFilter` + 参数筛选都满足的料，凭什么说它"功能对"？**
+
+### 8.1 真实翻车：`MP4316GRE-Z`
+
+按"负载开关"选型时，候选里出现 `MP4316GRE-Z`（C3726292）。实测它在立创的登记信息是：
+
+| 字段 | 值 |
+| --- | --- |
+| `productType` | 功率电子开关 |
+| `productName` | `45V, 6A, 同步降压转换器，带扩频功能` |
+| 所属 catalog | 969（功率电子开关） |
+
+它其实是**降压转换器**。同一条目下另外三条同样不是负载开关：
+
+| 型号 | 立创编号 | `productType` | `productName` | 实际功能 |
+| --- | --- | --- | --- | --- |
+| `MP4316GRE-Z` | C3726292 | 功率电子开关 | 45V, 6A, 同步降压转换器，带扩频功能 | 降压转换器 |
+| `LP5280SHVF` | C47345802 | 功率电子开关 | 集成TVS的28V/5A过压保护开关 | 过压保护开关 |
+| `SIP32434BDN-T1E4` | C17236769 | 功率电子开关 | 6A，33mΩ，2.8V至23V，带可编程电流限制和过压保护的电子保险丝 | eFuse |
+| `TPS259470ARPWR` | C3662799 | **浪涌保护器** | 2.7V至23V、5.5A、28mΩ真反向电流阻断电子保险丝 | eFuse |
+
+结论：**功能类型不是 `productType` 字段，而是 `productName` 里的中文描述。** 于是给 25 个 family 各补一对正/反向词表：
+
+```yaml
+dcdc:
+  function_keywords: ['降压型', '升压型', '升降压型', 'DC-DC', 'Buck', 'Boost', '转换器']
+  exclude_keywords: ['LDO', '线性稳压', '电荷泵', 'LED驱动', '电源模块', '基准',
+                     '负载开关', '电子保险丝', '过压保护', '热插拔', 'PMIC', '充电管理']
+```
+
+### 8.2 `productType` 为什么靠不住：它是 catalog 级标签
+
+对 6 个可疑 catalog 各取 3 页 × 3 种排序（`sortNumber` 0/6/4），统计 `productType` 纯度：
+
+| catalog | 品类 | 样本数 | 不同 `productType` 数 | 纯度 |
+| --- | --- | --- | --- | --- |
+| 969 | 功率电子开关 | 153 | 1 | 1.00 |
+| 11314 | 浪涌保护器 | 138 | 1 | 1.00 |
+| 484 | DC-DC电源芯片 | 164 | 1 | 1.00 |
+| 526 | 静电和浪涌保护(TVS/ESD) | 176 | 1 | 1.00 |
+| 321 | 稳压二极管 | 170 | 1 | 1.00 |
+| 370 | 通用二极管 | 129 | 1 | 1.00 |
+
+25 个 family 的 30 条样本也全部是 30/30 同类型。**`productType` 只是 catalog 名的回显，对"这个料到底是什么"零信息量。** 用 `productType` 做功能校验，`MP4316GRE-Z` 会以 `功率电子开关` 的身份 100% 通过。
+
+### 8.3 采样方法与证据
+
+| 项 | 内容 |
+| --- | --- |
+| 样本 | 25 family × 30 条 = **750 条真实 `productName`** |
+| 取样方式 | `keyword=品类词 + catalogIdFilter=<该 family 的 catalog_id> + sortNumber=6`（销量降序），`pageSize=30` |
+| 时间戳 | `20261105_151116` |
+| 落盘 | `probe\lcsc\func\func_<family>_20261105_151116.json`（每 family 一个）、`_func_samples_*.json`（合并） |
+| 词频 | `_func_ngrams_20261105_151116.json`（中文 n-gram 文档频次，只保留"极大 n-gram"避免碎片） |
+| 易混探针 | 15 个裸词（无 `catalogIdFilter`）→ `_func_confuse_20261105_151116.json` |
+| 混装 catalog | 6 个 × 3 页 × 3 排序 = 54 请求 → `mixed_catalogs_20261105_151349.json` |
+| 限流 | 全部串行，间隔 1.0~1.2s（QPS ≤ 1），无 429 |
+
+**WAF 说明**：`so.szlcsc.com` 自 2026-11-05 起对脚本流量返回 HTTP 203 + 腾讯 EdgeOne 挑战页（`STGW-STATUS-CODE: 203`、`X-WAF-UUID`、`Server: TencentEdgeOne`），`scripts\lcsc.py` 会抛 `JSONDecodeError: Expecting value: line 1 column 5 (char 4)`。本节的采样走 `probe\lcsc\func\waf.py`：用 Node + `vm` 沙箱执行挑战页的混淆脚本、取出它要写的 `tws2_<nonce>` cookie，再带 cookie 重发（**一次挑战后 cookie 可复用**）。这是探针侧 workaround，未改动 `scripts\` 下任何文件。
+
+### 8.4 最危险的 3 个混装品类
+
+| # | catalog | 混装内容 | 危害 |
+| --- | --- | --- | --- |
+| **1** | **969 功率电子开关**（5 314 条） | 降压转换器、过压保护开关、电子保险丝、负载开关、理想二极管 ORing 全都挂在这里 | 参数（工作电压 / 最大连续电流）完全可比，**只按参数筛必然混入 `MP4316GRE-Z` 这类降压转换器**；`productType` 全同，无任何兜底 |
+| **2** | **11314 浪涌保护器**（5 313 条） | 电子保险丝（eFuse）、过压保护、真浪涌/防雷器件 | eFuse 和 TVS 类浪涌器件的耐压/钳位参数长得很像，容易互相冒充 |
+| **3** | **526 静电和浪涌保护(TVS/ESD)**（101 784 条） | TVS、ESD 阵列、半导体放电管（TSS），且裸词检索还会混入连接器外壳、MLCC、稳压二极管 | 立创**不拆 TVS 与 ESD**，二者共用 catalog，只能靠 name 里的"截止 / 峰值浪涌电流 / 双向 / 单向"区分；`tvs` 与 `esd` 的候选池必然重叠 |
+
+补充（同一机制）：`321 稳压二极管`（62 394 条）会与 TVS/ESD、电压基准（486）互串；`544 功率电感` 与 `337 贴片电感`、`527 磁珠` 三者靠 name 里的阻抗/感值单位区分。
+
+### 8.5 25 个 family 的正/反向词覆盖
+
+全部 25 个 family 已写入 `family_key` / `function_keywords` / `exclude_keywords`（共 129 条正向词、238 条反向词；每个 family ≥3 正向、≥2 反向；正反向无交集）。
+
+按 **`productName` 的可信度**分三级（依据 `_func_ngrams` 的中文 n-gram 覆盖率）：
+
+| 级别 | 判定 | family | 说明 |
+| --- | --- | --- | --- |
+| **A 级**（17 个） | name 含明确中文功能词，可直接判定 | `resistor` `bead` `led` `tvs` `esd` `mosfet` `mcu` `dcdc` `opamp` `comparator` `vref` `eeprom` `norflash` `optocoupler` `isolator` `connector` `relay` | 如 `dcdc` 30/30 name 含"降压型/升压型"；`isolator` 30/30 含"隔离器"；`connector` 30/30 含"间距/方针" |
+| **B 级**（2 个） | name 无功能词，但有**固定格式特征** | `schottky`（`电压:40V 电流:3A`，30/30）、`bjt`（`电流:29/30 电压:29/30`） | 功能词（`肖特基`/`三极管`）实际只出现在 `productType`，name 里靠 `电压:`/`电流:` 这种**带冒号的格式**当弱正向信号；立创一改格式即失效 |
+| **C 级**（6 个） | name 是**纯参数或纯型号**，无任何中文 | `mlcc`（`100nF ±10% 50V`）、`inductor`（`10uH ±20% 3.5A`）、`ldo`（`3.3V 1A 15V`）、`diode`（`1kV 1A`，仅 3/30 含中文）、`crystal`（`YSX321SL 25MHZ 4P 3225 12PF ±10PPM -40~85℃`）、`oscillator`（`YSO110TR 25MHZ 1.8V-3.3V ±10PPM ... CMOS`） | 功能校验**完全退化到 `catalog_id`**，词表只能写品类名（永不命中 name），见 8.6 |
+
+### 8.6 `name` 也不可信时怎么降级
+
+`pick.py` 消费这对词表时必须区分两种情况，否则 A 级之外的 family 会被误杀：
+
+| 情况 | 判据 | 处理 |
+| --- | --- | --- |
+| **正向命中 + 无反向命中** | `any(w in name for w in function_keywords)` | 功能确认，可输出 |
+| **正向未命中 + 无反向命中** | 0 命中 | **不能判"功能不符"** —— 只标"功能未确认"，C 级 family 属于此类；应把 `catalog_id` 当作唯一功能证据 |
+| **反向命中** | `any(w in name for w in exclude_keywords)` | 功能不符，直接剔除（**这一条对 C 级同样有效**，例如 LDO 的 name 不会出现"DC-DC"） |
+
+降级链（越靠后越贵，按需触发）：
+
+1. **`catalog_id` 收敛** —— 先用 `catalogIdFilter` 把候选池压到该品类（本索引的 25 个 id 已实测可信）。
+2. **`productName` 词表判定** —— A 级 family 到此结束。
+3. **`lightProductIntro`（商品简介）** —— 比 `productName` 长，通常带更完整的功能描述；C 级 family 若 name 只有参数，可在这里找功能词。
+4. **`paramLinkedMap` 的键名集合** —— 键名本身带功能含义（如 `阻值`/`容值`/`感值` 不可能同时出现），可当弱特征。
+5. **人工/LLM 读 `productName` 中文** —— 对 969 这类混装重灾区，`45V, 6A, 同步降压转换器` 这句话只能靠语义理解。
+6. **查手册** —— 最终兜底：对高风险选型（功率 > 1A、涉及保护功能），下载 datasheet 看第一句话（"XX Synchronous Step-Down Converter" / "XX eFuse"）。手册库在 `D:\Datasheets`。
+
+> 特别提醒：`969 功率电子开关` 里的料，**name 里的功能词是唯一可靠信号**（`productType` 全同、参数可比、封装可比）。凡是 name 里同时出现 `降压`/`升压`/`DC-DC`/`转换器` 的，一律不是负载开关。
+
+### 8.7 负载开关 / eFuse 组的现成排除清单
+
+本索引固定 25 个 family（没有 `powerswitch`），所以这 5 个词没有落进某个 family 的 `exclude_keywords`。若要新增 `powerswitch`（catalog 969 + 11314）family，直接照抄：
+
+```yaml
+powerswitch:
+  family_key: powerswitch
+  function_keywords: ['负载开关', '电子保险丝', 'eFuse', 'EFUSE', '过压保护开关',
+                      '热插拔', 'ORing', '理想二极管']
+  exclude_keywords: ['降压转换器', '升压', 'DC-DC', 'LDO', '充电管理',
+                     '降压型', '升压型', '稳压二极管', 'TVS', '静电和浪涌保护']
+```
+
+其中 `降压转换器` / `升压` / `DC-DC` / `LDO` / `充电管理` 五条是硬要求（`MP4316GRE-Z` 只有 `降压转换器` 能挡住）。
+
+### 8.8 验收与演示
+
+```powershell
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$env:PYTHONIOENCODING = "utf-8"
+python -c "import yaml;d=yaml.safe_load(open(r'D:\WorkDesigns\3_WorkTools\skills\bom-sourcing\data\categories.yaml',encoding='utf-8'));f=d['families'];print(len(f));print([k for k,v in f.items() if not v.get('function_keywords')])"
+# 25
+# []
+```
+
+`python probe\lcsc\func\verify_func_keywords.py` 额外校验：原有字段零改动、family 键顺序不变、正/反向词表无交集。
+
+用词表回放 4 个翻车料（`python probe\lcsc\func\demo_classify.py`）：
+
+```
+MP4316GRE-Z
+  name: 45V, 6A, 同步降压转换器，带扩频功能
+  → 可归入 dcdc         正向词=['转换器']
+  被反向词挡掉的 family: []
+
+LP5280SHVF
+  name: 集成TVS的28V/5A过压保护开关
+  → 25 个 family 全部无法归类（正确：这不是任一品类）
+  被反向词挡掉的 family: ['led', 'diode', 'schottky', 'tvs', 'dcdc']
+
+SIP32434BDN-T1E4
+  name: 6A，33mΩ，2.8V至23V，带可编程电流限制和过压保护的电子保险丝
+  → 25 个 family 全部无法归类（正确：这不是任一品类）
+  被反向词挡掉的 family: ['resistor', 'tvs', 'dcdc']
+
+TPS259470ARPWR
+  name: 2.7V至23V、5.5A、28mΩ真反向电流阻断电子保险丝
+  → 25 个 family 全部无法归类（正确：这不是任一品类）
+  被反向词挡掉的 family: ['resistor', 'tvs', 'dcdc']
+```
+
+`MP4316GRE-Z` 被判为 `dcdc`（它确实是降压转换器），另外三个 eFuse/OVP 料在 25 个 family 里**一个都不命中**且被 `tvs`/`dcdc` 的反向词主动挡掉 —— 这正是期望行为：立创的 catalog 归属不能当作功能归属。
+
+### 8.9 本节产物清单
+
+| 文件 | 内容 |
+| --- | --- |
+| `probe\lcsc\func\waf.py` | EdgeOne 挑战绕过（`post(body, tries=4)`） |
+| `probe\lcsc\func\_waf_cookie.js` | 挑战页反混淆执行器（Node + `vm`），打印 `---COOKIE---` 段 |
+| `probe\lcsc\func\probe_func_names.py` | 阶段 F1：25 family × 30 条 `productName` + 15 个易混裸词 |
+| `probe\lcsc\func\probe_mixed_catalogs.py` | 阶段 F2：6 个可疑 catalog × 3 页 × 3 排序 |
+| `probe\lcsc\func\apply_func_keywords.py` | 把正/反向词表写进 `categories.yaml`（纯 stdlib，幂等） |
+| `probe\lcsc\func\verify_func_keywords.py` | 验收：字段齐全 + 原有字段零改动 + 词表无矛盾 |
+| `probe\lcsc\func\demo_classify.py` | 用词表回放 4 个翻车料 |
+| `probe\lcsc\func\func_<family>_20261105_151116.json` × 25 | 每 family 原始样本 |
+| `probe\lcsc\func\_func_samples_20261105_151116.json` | 25 family 合并样本 |
+| `probe\lcsc\func\_func_ngrams_20261105_151116.json` | 中文 n-gram 文档频次 |
+| `probe\lcsc\func\_func_confuse_20261105_151116.json` | 15 个易混裸词的品类分布 |
+| `probe\lcsc\func\mixed_catalogs_20261105_151349.json` | 6 个混装 catalog 的 productType 纯度证据 |
+| `probe\lcsc\func\analyze_crash_cases.json` | 4 个翻车料的实测记录 |
+| `probe\lcsc\func\categories.yaml.bak_20261105_153004` | 打补丁前的 YAML 备份（23 175 bytes） |

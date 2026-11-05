@@ -180,7 +180,7 @@ def match_mpn(cli: Lcsc, line, need, pref="stock"):
     seen = {}
     for q in queries:
         try:
-            res = cli.raw_search(q, sort="relevance", spot=0)
+            res = cli.raw_search(q, sort="relevance")  # spotFilter 只接受 1；传 0 会静默返 0 条
         except Exception as e:  # noqa: BLE001
             return {"chosen": None, "candidates": [], "confidence": "error", "reason": str(e), "checks": []}
         for rec in res["records"]:
@@ -224,7 +224,7 @@ def match_param(cli: Lcsc, line, need, pref="price"):
     if line.get("package") and norm_pkg(line["package"]) not in keyword:
         keyword += " " + line["package"]
     try:
-        res = cli.search(keyword, limit=40, sort="price_asc", spot=0)
+        res = cli.search(keyword, limit=40, sort="price_asc")
     except Exception as e:  # noqa: BLE001
         return {"chosen": None, "candidates": [], "confidence": "error", "reason": str(e), "checks": []}
     recs = res["records"]

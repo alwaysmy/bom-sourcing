@@ -16,17 +16,24 @@
 | 找替代料 | `python scripts/lcsc.py alternate C8734 --qty 100` |
 | 淘宝比价 | `python scripts/taobao.py search "STM32F103C8T6" --sort sales --limit 10` |
 | 海外站比价 | `python scripts/distributor.py search "TPS25947" --site both --limit 5` |
+| 原厂价/库存 | `python scripts/origin.py search TPA7836B --vendor 3peak` |
+| 取数据手册 | `python scripts/lcsc.py detail C8734 --pdf --download ./pdfs` |
 
 ## 能力
 
 - **BOM 配单**：CSV/TSV/XLSX/纯文本 → 列名自动识别 → 型号匹配（精确/前缀/包含，考虑封装、现货、销量）→
   指标核对（`✔`/`✘`/`?`）→ 阶梯价落档 → 备料量与 MOQ → Markdown 报价单 + JSON。
 - **按意图找料**：一句话 → 品类（`catalogIdFilter`）→ 候选 60 条 → 从 `paramLinkedMap` 动态聚参数键 →
-  约束过滤 → 排序（销量/价格/库存）→ 落选主因。已覆盖 25 个 family（阻容感、二极管、MOS、LDO、DC-DC、
-  MCU、运放、比较器、基准、EEPROM、NOR FLASH、晶振、隔离器、光耦、继电器、连接器等）。
+  约束过滤 → **功能符合性闸门** → 排序（销量/价格/库存）→ 落选主因（含"因功能不符剔除"）。
+  已覆盖 26 个 family（阻容感、二极管、MOS、LDO、DC-DC、MCU、运放、比较器、基准、EEPROM、
+  NOR FLASH、晶振、隔离器、光耦、继电器、连接器、功率电子开关等）。
 - **替代料**：立创 substitute 接口（相似度 + 参数差异 + 国产替代），海外站与同型号兜底。
 - **渠道建议**：≤10 套淘宝优先、11–100 立创/淘宝比价、>100 立创批量/1688，实测校正已写进文档。
 - **海外分销商**：Mouser 中国 / DigiKey 中国检索（含税人民币价 + 库存），用于"立创没有的型号"比价。
+- **原厂官方商城**：19 家注册（3PEAK 免登录含税人民币阶梯价 + 实时库存；TI 美元 1ku 价 + 浏览器取库存），
+  用原厂价当"会不会买到翻新/散新"的基线。
+- **功能符合性**：立创品类按采购口径分，`功率电子开关` 里混着降压转换器；`pick.py` 用商品名功能词做
+  四态判定（ok/mismatch/conflict/unknown），挡掉"参数满足但功能不对"的料。
 
 ## 安装
 

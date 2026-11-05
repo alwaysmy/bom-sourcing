@@ -1,0 +1,477 @@
+# =============================================================================
+# 行业惯例数值 —— 配单 / 选料的数值知识库（机读版）
+#
+# 用途：给 D4「指标核对」与 D5「数量与损耗」提供可直接比对的数字。
+# 特点：每一个数字都带出处与档位。**不要只取一个数就用** —— 降额、损耗、余量
+#       全部区分「商业档 / 高可靠档」或「少量 / 批量」，单一阈值会诱导误用。
+# 人读版：references/methodology.md §6.2 / §7.3 / §7.4
+#
+# 重要原则：
+#   1. 降额是「定值判据」，不是「越大越安全」—— 过度降额会因封装变大而更易弯曲开裂
+#   2. 商业档是默认档；高可靠档（车规 / 医疗 / 军工）必须显式声明
+#   3. 经验值（experience）可被人工推翻；官方/实测值（official/measured）不可
+# =============================================================================
+
+schema: bom-sourcing/knowledge/industry-norms
+version: 1
+generated: '2026-11-05'
+locale: zh-CN
+
+purpose: >-
+  把「这颗电容该买多少伏」「这个电阻功率够不够」「这个 BOM 该多买几颗」之类
+  天天要回答的问题，固化成带出处的数字，避免每次现编。
+
+evidence_levels:
+  official: 厂商 / 标准组织正式文档或平台官方说明，可作硬约束
+  measured: 本仓 probe/ 下脚本实测数据，可作硬约束
+  secondary: 第三方文章转述，只作提示
+  experience: 行业通行经验值，只作启发式，必须可被人工推翻
+
+# -----------------------------------------------------------------------------
+# 一、降额（derating）—— 百分比是「占额定值的上限」
+# -----------------------------------------------------------------------------
+derating:
+  basis: IPC-9592B
+  source: https://pcbsync.com/component-derating-guidelines/
+  evidence: official
+  note: >-
+    商业档 = 消费 / 一般工业；高可靠档 = 车规 / 医疗 / 军工 / 长寿命设备。
+    IPC-9592B 对部分项允许更宽（如 MLCC Class II 允许 90%），本仓商业档取 80% 更保守。
+
+  general_margin:
+    value: [1.2, 1.5]
+    unit: 'x'
+    note: 通用余量，适用于未单独列出降额比例的器件
+    evidence: experience
+
+  # 与 data/spec-rules.yaml 的关系（避免两份文件漂移）：
+  #   spec-rules.yaml 的 globals.voltage_derating / current_derating / power_derating
+  #   用「倍数」表达，脚本直接吃；本文件用「百分比」表达，给人看。
+  #   两者换算：percent = 1 / multiplier。同一物理约束只应有一处权威。
+  #   优先级：spec-rules.yaml 的 globals 是脚本执行口径；本文件是解释与出处。
+  #   特别注意 MLCC 有两条独立约束，取更严的那条：
+  #     ①电压降额（热/击穿）：work <= 80% rated → 1.25x
+  #     ②直流偏压（有效容值）：rated >= 2x work → 2.0x
+  #   ⚠ 电源轨上按 ②（2.0x），这是更严的一条。
+  multiplier_form:
+    source: data/spec-rules.yaml#globals
+    evidence: measured
+    voltage_derating:
+      ceramic_mlcc_class2: 2.0
+      ceramic_mlcc_class1: 1.5
+      electrolytic: 1.5
+      tantalum: 2.5
+      film: 1.5
+      mosfet_vds: 1.5
+      diode_vr: 1.5
+      bjt_vceo: 1.5
+      ldo_vin: 1.2
+    current_derating:
+      continuous_vs_rated: 2.0
+      peak_vs_rated: 1.3
+      inductor_isat: 1.3
+      fuse_hold: 1.5
+    power_derating:
+      resistor: 2.0
+      mosfet: 2.0
+      bjt: 2.0
+    thermal:
+      tj_margin: 0.8
+      electrolytic_life_rule: 每降 10 摄氏度寿命翻倍（Arrhenius）
+    note: >-
+      上表为脚本执行口径。本文件 derating.families 里的百分比是同一约束的人工可读版，
+      两者不一致时以 spec-rules.yaml 为准，并回改本文件。
+
+  families:
+    capacitor_mlcc:
+      display: MLCC
+      voltage_class_II:
+        commercial: 0.80
+        high_reliability: 0.55
+        range_high_reliability: [0.50, 0.60]
+        note: Class II（X5R/X7R/Y5V 等）；IPC-9592B 允许 90%，本仓取 80%
+        evidence: official
+      voltage_class_I:
+        commercial: [0.80, 0.90]
+        high_reliability: 0.60
+        note: Class I（C0G/NP0）
+        evidence: official
+      dc_bias_rule:
+        rule: 电源轨上 Class II MLCC 额定电压 ≥ 2× 工作电压
+        reason: 直流偏压导致有效容值大幅下降
+        evidence: official
+
+    capacitor_tantalum:
+      display: 钽电容
+      voltage_MnO2:
+        commercial: 0.50
+        high_reliability: 0.50
+        mandatory: true
+        reason: 失效模式是热失控 + 短路（不是开路），必须 50% 强制
+        evidence: official
+      voltage_polymer:
+        commercial: [0.70, 0.80]
+        high_reliability: 0.60
+        note: 聚合物钽
+        evidence: official
+      spec_check_hint:
+        rule: 钽耐压 < 需求 × 2 时给 info 提示（不淘汰候选）
+        evidence: measured
+        source: references/spec-check.md
+
+    capacitor_electrolytic:
+      display: 铝电解
+      voltage:
+        commercial: 0.80
+        high_reliability: [0.70, 0.80]
+        evidence: official
+      ripple:
+        commercial: 0.80
+        high_reliability: 0.70
+        evidence: official
+
+    capacitor_film:
+      display: 薄膜电容
+      voltage:
+        commercial: 0.80
+        high_reliability: 0.60
+        evidence: official
+
+    resistor:
+      display: 电阻
+      power:
+        commercial: [0.50, 0.60]
+        high_reliability: 0.50
+        evidence: official
+      power_wirewound:
+        commercial: 0.50
+        high_reliability: 0.50
+        note: 绕线电阻
+        evidence: official
+      power_margin_in_spec_rules:
+        value: 2.0
+        unit: 'x'
+        note: spec-rules.yaml 里 resistor.power_rating 的 margin 取 2.0×（额定功率 >= 2x 实际耗散）
+        evidence: measured
+        source: data/spec-rules.yaml
+
+    diode_rectifier:
+      display: 整流二极管
+      piv_vrrm:
+        commercial: [0.70, 0.80]
+        high_reliability: [0.50, 0.60]
+        evidence: official
+
+    diode_zener:
+      display: 稳压二极管
+      power:
+        max_ratio: 0.50
+        note: 功耗 < 0.5× 额定
+        evidence: experience
+        source: research/cn-knowledge.md
+
+    mosfet:
+      display: MOSFET
+      id:
+        commercial: [0.75, 0.80]
+        high_reliability: [0.60, 0.70]
+        evidence: official
+      vds:
+        commercial: 0.80
+        high_reliability: 0.75
+        evidence: official
+      tj:
+        commercial: 0.80
+        unit: of Tjmax
+        high_reliability: 0.70
+        evidence: official
+
+    bjt:
+      display: 三极管
+      power:
+        commercial: 0.50
+        evidence: official
+      vceo:
+        commercial: 0.75
+        high_reliability: [0.60, 0.70]
+        evidence: official
+
+    led:
+      display: LED
+      forward_current:
+        commercial: 0.70
+        high_reliability: 0.60
+        evidence: official
+
+    ic:
+      display: 集成电路
+      supply_voltage:
+        commercial: 0.90
+        high_reliability: 0.80
+        evidence: official
+      tj:
+        commercial: 0.80
+        unit: of Tjmax
+        high_reliability: 'Tj < 100 摄氏度'
+        evidence: official
+      power:
+        commercial: 0.75
+        evidence: official
+
+    inductor:
+      display: 电感 / 变压器
+      current:
+        commercial: 0.80
+        high_reliability: 0.70
+        evidence: official
+
+    relay:
+      display: 继电器
+      contact_current:
+        commercial: 0.75
+        high_reliability: [0.60, 0.70]
+        evidence: official
+
+    fuse:
+      display: 保险丝
+      current:
+        commercial: 0.75
+        high_reliability: 0.70
+        reference_temp: 25
+        temp_derating:
+          rule: 慢断型每高于 25 摄氏度再降 0.5% 每摄氏度
+          formula: 'I_allow = I_rated * (0.75 - 0.005 * (T_ambient - 25))'
+        unit: 摄氏度
+        evidence: official
+
+    connector:
+      display: 连接器
+      current_per_pin:
+        commercial: 0.80
+        high_reliability: 0.70
+        evidence: official
+      note: 相邻针同时载流必须成组降额，不能逐针算
+
+# -----------------------------------------------------------------------------
+# 二、隐性应力（最容易被忽略、也最容易翻车的项）
+# -----------------------------------------------------------------------------
+hidden_stress:
+  mlcc_dc_bias:
+    name: MLCC 直流偏压容值损失
+    evidence: official
+    source: https://pcbsync.com/component-derating-guidelines/
+    data:
+      - spec: 0402 10uF/6.3V X5R
+        applied: 5V
+        effective: 1.5uF
+        loss: -0.85
+      - spec: 0805 同规格
+        applied: 5V
+        loss_range: [-0.50, -0.30]
+      - spec: 16V / 25V 档
+        applied: 5V
+        note: 接近标称值
+    rule: 电源轨上 Class II MLCC 至少用 2× 工作电压的额定值
+    real_incident: >-
+      3000 台工业网关用 10uF/10V X5R 在 5V 轨（以为有 50% 余量），
+      中东户外柜内 65-70 摄氏度下 8 个月开始批量复位，
+      最终改 10uF/25V X7R 0805 并重开板，损失超过前期省下 BOM 成本的 20 倍。
+
+  mosfet_drain_ringing:
+    name: MOSFET 漏极振铃
+    evidence: official
+    rule: 瞬态可比稳态高 50% 以上
+    action: 稳态 24V 要按 36V 选 Vds
+
+  connector_adjacent_pins:
+    name: 连接器相邻针载流
+    evidence: official
+    rule: 多针同时载流必须成组降额
+    action: 不能按单针额定值乘以针数
+
+  altitude:
+    name: 海拔
+    evidence: official
+    threshold: 2000
+    unit: m
+    rule: 超过 2000m 空气绝缘强度下降，必须额外降额
+
+  temperature:
+    name: 温度加速
+    evidence: official
+    arrhenius_rule: 结温每降 10 摄氏度，失效率约减半
+    activation_energy_ev: 0.7
+    mlcc_voltage_acceleration_exponent: [3, 7]
+    note: MLCC 降 20% 电压可延寿 2-5 倍
+
+# -----------------------------------------------------------------------------
+# 三、损耗与余量（该买多少）
+# -----------------------------------------------------------------------------
+spares:
+  evidence: experience
+  source: research/cn-knowledge.md
+  mnemonic: 阻容类千分之三，IC 不允许丢料
+  by_category:
+    - category: 常规阻容 0402 及以上
+      rate_range: [0.003, 0.005]
+      min_extra_pcs: [5, 10]
+    - category: 0201 / 01005
+      rate_range: [0.005, 0.010]
+      min_extra_pcs: [10, 20]
+    - category: BGA / QFN / IC
+      rate: 0.0
+      override: true
+      reason: 拆盘即报废，物理事实优先于统计模型
+    - category: 连接器 / 异形件
+      rate_range: [0.005, 0.020]
+  cost_modes:
+    - name: 固定损耗率
+      description: 按上表百分比
+    - name: 按单价分档加数量
+      description: 更省钱，适合小批量
+      tiers:
+        - price_lt: 0.10
+          extra: 10
+        - price_range: [0.10, 0.20]
+          extra: 8
+        - price_ge: 1.00
+          extra: 0
+      unit: 颗
+    - name: 平台基础库整盘上机
+      description: 嘉立创基础库按整盘供料，不另算损耗
+  safety_stock_formula:
+    evidence: secondary
+    source: http://essay.utwente.nl/100620/1/Rietman_BA_BMS.pdf
+    formula: 'SS = z * sigma_LTD'
+    cv_formula: 'CV_LTD = sigma_ITD / mu_LTD'
+    z_table:
+      '0.90': 1.28
+      '0.95': 1.65
+      '0.99': 2.33
+    note: 需求波动大时用公式，稳定时用经验值
+
+# -----------------------------------------------------------------------------
+# 四、成本（多少钱）
+# -----------------------------------------------------------------------------
+cost:
+  evidence: official
+  jlc_extended_library_fee:
+    value: 20
+    unit: 元/型号
+    basic_library: 0
+    note: 扩展库按型号数收费，基础库不收
+    implication: 物料归一化直接省钱；10 个扩展库料号 = 200 元
+  normalization_rule: 报价单必须加一行「物料归一化成本 = 扩展库型号数 * 20 元」
+
+  brand_spread:
+    evidence: measured
+    source: research/market-probe.md
+    note: 同规格换品牌是最安全、最有效的降本维度
+    data:
+      SS34: 15.0
+      '1N4007': 7.0
+      AMS1117: 5.0
+      AO3400A: 3.2
+    unit: 'x'
+
+  channel_price_anchor:
+    evidence: measured
+    example: TPS259472ARPWR
+    data:
+      lcsc: '3.38 @1000'
+      mouser: '11.38 @25'
+      digikey: '17.43 @1'
+    unit: CNY
+    conclusion: 立创约为海外渠道的 1/4 到 1/3
+
+# -----------------------------------------------------------------------------
+# 五、参数比较口径（怎么比）
+# -----------------------------------------------------------------------------
+comparison:
+  evidence: measured
+  source: references/spec-check.md
+  tolerance:
+    value_relative: 0.02
+    note: 阻值 / 容值 / 电感相对误差 <= 2% 视为同值
+  voltage:
+    rule: 取区间最大值
+  precision:
+    rule: 用 tau 比较（精度是相对量）
+  package_aliases:
+    SOP-8: [SOIC-8-208mil]
+    SMA: [DO-214AC]
+    TYPE-C: [USB-C]
+  coarse_tokens:
+    values: [SMD, SMT]
+    action: 过粗，只提示不淘汰
+  test_condition_required:
+    rule: 任何参数比较都必须带测试条件
+    examples:
+      - 'AO3400A 48mR @Vgs2.5V vs 17mR @Vgs10V'
+      - 'LM393 300ns (onsemi) vs 1.3us (ST)'
+  info_only_hints:
+    - rule: MLCC 耐压 < 需求 * 1.25
+      action: 给 info 提示，不淘汰候选
+    - rule: 钽耐压 < 需求 * 2
+      action: 给 info 提示，不淘汰候选
+
+# -----------------------------------------------------------------------------
+# 六、生命周期（还能用多久）
+# -----------------------------------------------------------------------------
+lifecycle:
+  evidence: secondary
+  ltb_window_days: 90
+  source: https://resources.pcb.cadence.com/component-information-portal-cip/col/component-information-portal-cip/when-your-component-is-unavailable-alternates-last-buys-and-counterfeits
+  ltb_quantity_rule: 剩余项目生命周期需求 + 安全库存
+  ltb_precondition:
+    rule: LTB 只在「需求与衰减不确定度可界定、且存储条件可信」时才合理
+    source: https://crystal-display.com/download/104219/
+  ff_equivalence:
+    rule: FFF（Form-Fit-Function）替代必须做结构化 delta 认证，不能只对参数表
+  counterfeit_indicators:
+    evidence: experience
+    count: 7
+    items:
+      - 打磨痕迹
+      - 引脚光亮
+      - 印字锯齿
+      - 日期混乱
+      - 边沿直角 vs r 角
+      - 定位孔深浅不一
+      - 包装差异
+    chemical_test: 丝印用稀释剂能擦掉 = 假
+  refurbished_risk:
+    rule: 国产 32 位 MCU 翻新件不良率 10%-40%
+    evidence: experience
+
+# -----------------------------------------------------------------------------
+# 七、BOM 变更窗口（什么时候改最便宜）
+# -----------------------------------------------------------------------------
+bom_change_window:
+  evidence: experience
+  source: research/cn-knowledge.md
+  order_cheapest_first:
+    - stage: 工程资料阶段
+      cost: 最低
+    - stage: 采购阶段
+      cost: 中
+    - stage: 贴片阶段
+      cost: 高
+      reason: 停机换料 + 混料
+    - stage: 焊完
+      cost: 最高
+      reason: BGA / QFN 报废
+  rule: 进入贴片阶段不再改 BOM
+
+sources:
+  - https://pcbsync.com/component-derating-guidelines/
+  - https://yunxuan.blog.csdn.net/article/details/169935648
+  - https://www.eet-china.com/mp/a83089.html
+  - http://essay.utwente.nl/100620/1/Rietman_BA_BMS.pdf
+  - https://resources.pcb.cadence.com/component-information-portal-cip/col/component-information-portal-cip/when-your-component-is-unavailable-alternates-last-buys-and-counterfeits
+  - https://crystal-display.com/download/104219/
+  - research/cn-knowledge.md
+  - research/market-probe.md
+  - research/spec-rules.md
+  - references/spec-check.md
+  - data/spec-rules.yaml

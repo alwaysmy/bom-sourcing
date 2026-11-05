@@ -323,7 +323,7 @@ Cookie: <同上>
 | BOM 全站（上传/行数据/匹配/导出） | ❌ 401 | `/cas/user/info` 返回 `code:401` |
 
 - 浏览器请求头里**没有** `x-auth-token` 之类自定义鉴权头；认证完全靠 Cookie。
-- Cookie 关键项（名字口径）：`isLoginCustomerFlag`（账号号）、`JSESSIONID`、`_lcsc_fid`、`lccsid`、`acw_tc`、`ssxmod_itna`/`ssxmod_itna2`（腾讯 EdgeOne 反爬）、`noLoginCustomerFlag`。**登录态 cookie 有效期为会话级**，脚本化时从浏览器导出即可；具体值不入库。
+- Cookie 关键项（从请求头抓取，脱敏见 `probe/probe_cookie_browser.txt`）：`isLoginCustomerFlag=416461A`（账号号）、`JSESSIONID`、`_lcsc_fid`、`lccsid`、`acw_tc`、`ssxmod_itna`/`ssxmod_itna2`（腾讯 EdgeOne 反爬）、`noLoginCustomerFlag`。**登录态 cookie 有效期为会话级**，脚本化时从浏览器导出即可。
 - 仅有的签名接口：`item.szlcsc.com/product/stock/price/sign?productId=&cvt=&nonce=&sign=`。不带签名 → `{"code":110101,"ok":false}`；带浏览器签名 → 响应体 `null`（普通商品无额外报价）。**非必需**。
 - `https://so.szlcsc.com/global.html?k=…` 页面本身返回 **203 + JS 反爬挑战**（`_xvasu`/`_xvtsc`/`tws2_` cookie），但这是**页面外壳**；同域 XHR `POST /query/product` 不受影响 → 直接打接口即可，不要抓页面。
 - `wmsc.lcsc.com` 系列路径全部 404（`{"code":404,"msg":"The static resource is unavailable."}`）——老接口已下线。
