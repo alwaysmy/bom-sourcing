@@ -117,6 +117,7 @@ Excel 导出时选「CSV UTF-8」，中文列名能自动识别（型号/Comment
 | `scripts/bom.py` | BOM 解析 → 匹配 → 指标核对 → 报价单 | lcsc.py + spec.py |
 | `scripts/spec.py` | 参数解析与指标比对（可单跑自测） | 纯标准库 |
 | `scripts/taobao.py` | 淘宝/1688 检索（销量/价格排序、元/包→元/只归一），走真实浏览器 | Kimi WebBridge daemon |
+| `scripts/distributor.py` | 海外分销商检索：Mouser 中国 / DigiKey 中国（型号、库存、含税人民币价） | Kimi WebBridge daemon（两站都拦纯 HTTP） |
 
 公共约定：价格为**人民币含税单价**并按数量取阶梯；结果带抓取时间；缓存默认 6 小时
 （`%LOCALAPPDATA%\bom-sourcing\cache`，`--no-cache` 关闭）。
@@ -143,6 +144,8 @@ Excel 导出时选「CSV UTF-8」，中文列名能自动识别（型号/Comment
   是 `pick.py` 的品类解析表；人读版见 `references/research/categories.md`
 - `references/research/`：调研证据链（`BOM-配单-调研报告.md` 总报告、`lcsc-probe.md` 立创接口、
   `market-probe.md` 淘宝/1688 实测、`github-tools.md` 现成轮子、`cn-knowledge.md` 行业方法论、`spec-rules.md`）
+- `references/examples/load-switch-3v3-21v-5a.md`：完整选型样例（3.3V 起 / ≥21V / ≥5A 负载开关），
+  含短名单、渠道比价、排除项与风险——照着它写自己的选型结论
 - 探针原始响应（排序/facet/替代料/淘宝详情 JSON，约 18 MB）：`D:\WorkDesigns\3_WorkTools\Bom_Flow\probe\`
 
 ## 已验证 / 未覆盖（用前先看）
@@ -158,6 +161,9 @@ Excel 导出时选「CSV UTF-8」，中文列名能自动识别（型号/Comment
 - 指标核对：阻值/容值/电感/耐压/精度/功率/频率/封装 + MLCC/钽降额提示
 - 淘宝/1688：`taobao.py`（需真浏览器 + 淘宝登录态，走 Kimi WebBridge）；销量排序按 tab 点击，
   1688 用 `sortType=va_sales360`；单只价由标题数量归一（混装包/套装会被剔除，不当作有效比价）
+- 海外分销商：`distributor.py` 读 Mouser 中国 / DigiKey 中国（`--site mouser|digikey|both`），
+  返回型号、库存、**含税人民币**阶梯价。两站纯 HTTP 均被拦（DigiKey 403 Akamai、Mouser 403 DataDome），
+  必须走真浏览器；实测同一颗 TPS259472ARPWR：立创 ¥3.38@1000 vs Mouser ¥11.38@25 vs DigiKey ¥17.43@1
 
 **未覆盖 / 需人工**
 - 立创**参数区间筛选**：`queryParameterValue`+`lastParamName` 实测返回 0 条，用法未明。
@@ -167,6 +173,8 @@ Excel 导出时选「CSV UTF-8」，中文列名能自动识别（型号/Comment
 - 跨型号替代的最终裁决：`alternate` 给候选 + 参数差异，是否可用仍按 `references/spec-check.md` 的风险档人工确认
 - 立创历史价格曲线、批量议价、交期承诺：接口没有
 - 淘宝/1688 的阶梯价（1688 详情只给价格区间，没有 N–M 件台阶）
+- 海外站只做**检索比价**：含增值税、无人民币议价、交期按官网；DigiKey 搜索会先落到"品类卡片页"再点进品类
+  （`distributor.py` 已自动处理），任意型号不保证命中
 - 下单、支付、订单跟踪：不做
 
 ## 三个最常见的坑

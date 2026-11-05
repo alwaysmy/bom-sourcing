@@ -15,6 +15,7 @@
 | 查单个料 | `python scripts/lcsc.py search "STM32F103C8T6" --sort sales` / `price C8734 --qty 100`（JSON）/ `detail` / `compare` |
 | 找替代料 | `python scripts/lcsc.py alternate C8734 --qty 100` |
 | 淘宝比价 | `python scripts/taobao.py search "STM32F103C8T6" --sort sales --limit 10` |
+| 海外站比价 | `python scripts/distributor.py search "TPS25947" --site both --limit 5` |
 
 ## 能力
 
@@ -25,6 +26,7 @@
   MCU、运放、比较器、基准、EEPROM、NOR FLASH、晶振、隔离器、光耦、继电器、连接器等）。
 - **替代料**：立创 substitute 接口（相似度 + 参数差异 + 国产替代），海外站与同型号兜底。
 - **渠道建议**：≤10 套淘宝优先、11–100 立创/淘宝比价、>100 立创批量/1688，实测校正已写进文档。
+- **海外分销商**：Mouser 中国 / DigiKey 中国检索（含税人民币价 + 库存），用于"立创没有的型号"比价。
 
 ## 安装
 
@@ -41,6 +43,7 @@ scripts/pick.py       按意图找料
 scripts/bom.py        BOM 报价单
 scripts/spec.py       参数解析与指标比对
 scripts/taobao.py     淘宝/1688 检索（WebBridge 登录态）
+scripts/distributor.py  Mouser 中国 / DigiKey 中国检索（WebBridge 登录态）
 data/categories.yaml  25 family 的品类 id、参数键与关键约束
 data/spec-rules.yaml  32 family 的 critical/relaxable 参数、降额基准、风险备注
 references/           API 事实、指标判据、找料实现、渠道配方、调研证据链
