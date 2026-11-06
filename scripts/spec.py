@@ -115,10 +115,15 @@ def to_num(s):
 
 
 def parse_ohm(text):
+    """电阻值解析：'10kΩ' → 10000.0；'10mΩ' → 0.01；'4R7' → 4.7。
+
+    注意大小写：`M` = 兆（1e6），`m` = 毫（1e-3）—— 两者只差一个字母，
+    但 MOSFET 的 RDS(on) 常用 mΩ 标（10mΩ vs 10MΩ 差 1e9 倍）。
+    """
     if text is None:
         return None
     s = str(text)
-    m = re.search(NUM + r"\s*([kKMGRr]?)\s*(?:Ω|ohms?|欧)?", s)
+    m = re.search(NUM + r"\s*([pnuµmkKMGRr]?)\s*(?:Ω|ohms?|欧)?", s)
     if not m:
         return None
     try:

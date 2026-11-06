@@ -234,7 +234,12 @@ def load_categories():
 
 
 def match_family(token, cats):
-    """把 `ldo` / `LDO` / `线性稳压器` / `稳压芯片` 归一到一个 family。"""
+    """把 `ldo` / `LDO` / `线性稳压器` / `稳压芯片` 归一到一个 family。
+
+    注意：**短词只能全等**。早期版本对任意长度都做子串匹配，导致
+    `--param 沟道=N` 里的 token `N` 命中 `i**n**ductor`（功率电感）、
+    `P` 命中 `m**p**u`（单片机），于是 P 沟道 MOS 被解析成单片机。
+    """
     t = (token or "").strip()
     if not t:
         return None
@@ -243,14 +248,16 @@ def match_family(token, cats):
         return low
     if low in BUILTIN_KEYWORDS:
         return low
-    for fam, info in cats.items():
-        names = [fam, info.get("label_cn") or ""] + list(info.get("keywords") or [])
-        for n in names:
-            if n and (n.lower() == low or n.lower() in low or low in n.lower()):
+    # 1~2 个字符的 token（N / P / L / C / R）只认全等，绝不参与子串匹配
+    if len(low) >= 3:
+        for fam, info in cats.items():
+            names = [fam, info.get("label_cn") or ""] + list(info.get("keywords") or [])
+            for n in names:
+                if n and (n.lower() == low or n.lower() in low or low in n.lower()):
+                    return fam
+        for fam, kw in BUILTIN_KEYWORDS.items():
+            if kw.lower() in low or low in kw.lower():
                 return fam
-    for fam, kw in BUILTIN_KEYWORDS.items():
-        if kw.lower() in low or low in kw.lower():
-            return fam
     return None
 
 
@@ -338,17 +345,27 @@ def parse_intent(text, family):
     t = str(text or "")
     volt_role = FAMILY_VOLT_ROLE.get(family)
     amp_role = FAMILY_AMP_ROLE.get(family)
-    for m in re.finditer(r"(\d+(?:\.\d+)?)\s*(?:~\s*(\d+(?:\.\d+)?))?\s*V\b", t, re.I):
+    for m in re.finditer(r"([-−]?)\s*(\d+(?:\.\d+)?)\s*(?:~\s*([-−]?)\s*(\d+(?:\.\d+)?))?\s*V\b", t, re.I):
+        # 负号：MOSFET 的 `-30V` 是**P 沟道**的习惯写法，参数仍是 30V（绝对值）
+        neg = bool(m.group(1))
+        lo = float(m.group(2))
+        hi = float(m.group(4)) if m.group(4) else None
+        if neg and (family or "") in ("mosfet",):
+            out.append(Constraint("count_type", "=", "P沟道", f"P沟道（{m.group(0)} 推得）", ""))
         if volt_role:
             # 极性决定语义：输出电压要"是 3.3V"，耐压/漏源电压只要"不低于"
             pol = ALIASES.get(volt_role, ("", "", "eq"))[2]
-            if m.group(2) and pol == "in":
+            if hi is not None and pol == "in":
                 # 工作电压是区间参数：「3.3V~21V」要求候选区间**覆盖** [3.3, 21]
-                out.append(Constraint(volt_role, "cover", (float(m.group(1)), float(m.group(2))),
-                                       m.group(0), "V"))
+                out.append(Constraint(volt_role, "cover", (lo, hi), m.group(0), "V"))
                 continue
-            op = "=" if (pol == "eq" and not m.group(2)) else ">="
-            out.append(Constraint(volt_role, op, float(m.group(1)), m.group(0), "V"))
+            op = "=" if (pol == "eq" and hi is None) else ">="
+            out.append(Constraint(volt_role, op, lo, m.group(0), "V"))
+    # 沟道类型：`N沟道` / `N 沟道` / `NMOS` / `P 沟道` / `PMOS`
+    if (family or "") in ("mosfet",) and not any(c.quant == "count_type" for c in out):
+        mc = re.search(r"\b([NP])\s*(?:沟道|MOS|MOSFET)\b", t, re.I)
+        if mc:
+            out.append(Constraint("count_type", "=", f"{mc.group(1).upper()}沟道", mc.group(0), ""))
     for m in re.finditer(r"(\d+(?:\.\d+)?)\s*(m?A)\b", t):
         v = float(m.group(1)) * (1e-3 if m.group(2) == "mA" else 1)
         if amp_role:
