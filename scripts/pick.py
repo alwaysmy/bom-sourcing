@@ -1124,6 +1124,30 @@ def cmd_pick(args):
         except Exception as e:  # 黑名单坏掉不能拖垮选型
             print(f"[警告] 黑名单加载失败，已按空处理：{e}", file=sys.stderr)
 
+    # 品牌白名单：按「品牌 × 品类」放行（用户 m03469）
+    #   新品牌 / 已有品牌进入非同类物料 → 必须先背调或做知识库核对，不能静默推荐
+    wl_summary, wl_dropped = {}, []
+    if not getattr(args, "no_whitelist", False):
+        try:
+            import whitelist as _wl
+            _bl_mod = None
+            try:
+                import blacklist as _bl_mod  # noqa: F811  黑名单优先
+            except Exception:
+                _bl_mod = None
+            recs, wl_summary = _wl.gate_records(
+                recs, family=cat.get("family"), catalog_id=cat.get("catalog_id"),
+                blacklist_mod=_bl_mod)
+            if getattr(args, "strict_brand", False):
+                allow = [r for r in recs
+                         if r.get("whitelist_status") in ("approved", "kb_known")]
+                wl_dropped = [r for r in recs
+                              if r.get("whitelist_status") not in ("approved", "kb_known")]
+                recs = allow
+        except Exception as e:  # 白名单坏掉不能拖垮选型
+            print(f"[警告] 白名单加载失败，已按空处理：{e}", file=sys.stderr)
+            wl_summary = {}
+
     ok, fails_all, unknown_dropped = [], [], []
     func_mismatch, func_unconfirmed, func_conflict = [], [], []
     pkg_fallback = []  # 封装不符、但其余约束全满足的候选（用户要求"依然列出来并说明"）
@@ -1186,6 +1210,11 @@ def cmd_pick(args):
         print(f"黑名单已剔除 {len(bl_hits)} 条：" + "；".join(names)
               + ("…" if len(bl_hits) > 3 else "")
               + "（改名单：`python blacklist.py list|add|remove`；本次放行加 --no-blacklist）")
+    if wl_summary:
+        print(_wl.render_summary(wl_summary, cat.get("family")), end="")
+    if wl_dropped:
+        print(f"--strict-brand 已剔除 {len(wl_dropped)} 条未背调品牌的候选"
+              "（不加该开关时只标注、不剔除）")
     if func_mismatch:
         print(f"功能不符已剔除 {len(func_mismatch)} 条："
               + "；".join(func_mismatch[:3]) + ("…" if len(func_mismatch) > 3 else ""))
@@ -1222,6 +1251,7 @@ def cmd_pick(args):
                                  for r in pkg_fallback],
             "verified": verified,
             "blacklisted": bl_hits,
+            "brand_whitelist": wl_summary,
         }
         Path(args.json).write_text(json.dumps(out, ensure_ascii=False, indent=1), encoding="utf-8")
         print(f"\nJSON 已写入 {args.json}")
@@ -1294,6 +1324,10 @@ def main(argv=None):
                    help="关闭功能符合性校验（默认开启：滤掉名称含反向功能词的料，如把降压转换器当负载开关）")
     p.add_argument("--no-blacklist", dest="no_blacklist", action="store_true",
                    help="本次忽略黑名单（默认按 data/knowledge/blacklist.yaml 剔除品牌/料号）")
+    p.add_argument("--no-whitelist", dest="no_whitelist", action="store_true",
+                   help="本次不做品牌白名单核对（默认按「品牌 × 品类」标注是否已背调）")
+    p.add_argument("--strict-brand", dest="strict_brand", action="store_true",
+                   help="只保留白名单已通过的品牌（未背调/跨品类的一律剔除）")
     p.add_argument("--taobao", type=int, default=0, metavar="N",
                    help="对前 N 个结果去淘宝/1688 查零售单只价，做渠道比价")
     p.add_argument("--no-taobao", dest="no_taobao", action="store_true",

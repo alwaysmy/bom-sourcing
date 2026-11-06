@@ -252,6 +252,43 @@ python brand_dossier.py render 12489                        # 出证据链报告
 `dossier` 字段指回档案；样例：`data/knowledge/brands.dossier/12489-tokmas.yaml`
 （Tokmas：8 条证据 = 5 事实 + 2 自述 + 1 推论，5 条 gaps，tier=original_fabless）。
 
+## 品牌白名单（品牌 × 品类放行 —— 不是品牌整体放行）
+
+**背调通过 ≠ 这个牌子的所有料都能用。** 同一品牌下不同品类的实际生产方、产线、质量体系都可能不同
+（贴牌/代理尤其如此），所以白名单的粒度是 **「品牌 + 物料类别」这一对**：
+
+> **规则（用户 m03469）**：每次引入新品牌，或者已有品牌进入**非同类物料**，都必须先做背调或知识库核对；
+> 引入的品牌存进白名单。没核过的品牌不能当结论。
+
+```bash
+cd scripts
+python whitelist.py check "Tokmas(托克马斯)" --family connector   # ✅ 已背调
+python whitelist.py check "Tokmas(托克马斯)" --family bjt         # ⏳ 待背调（只见过 ULN2803 贴牌）
+python whitelist.py approve "Tokmas(托克马斯)" --family connector --label 连接器/排针 \
+    --basis "圣禾堂 2026-08-18 官方授权代理公告" --grade fact --authorized "傅师傅 2026-11-06 允许放行"
+python whitelist.py list                                           # 看全量
+```
+
+**五态判定**（`check()` 的 `status`）：
+
+| 状态 | 含义 | 能不能推荐 |
+|---|---|---|
+| `approved` | 该品牌在本品类已背调通过 | ✅ 可以 |
+| `kb_known` | 白名单没有，但 `vendors.yaml` 有分层（知识库核对过），**本品类未单独背调** | 可以，但要说明"本品类未单独背调" |
+| `pending` | 本品类已登记待背调（见过料号但证据不足） | ❌ 不能当结论 |
+| `approved_other_family` | 品牌在别的品类通过了，本品类没核过 | ❌ 需补该品类证据 |
+| `unknown` | 白名单和知识库都没有 | ❌ 必须先背调 |
+
+接入位置（默认开，`--no-whitelist` 关闭）：
+
+| 入口 | 行为 |
+|---|---|
+| `pick.py` | 输出「## 品牌白名单核对」段：已背调 / 知识库已知 / 需先背调 N 个品牌（带 C 号样例与处置命令）；`--strict-brand` 只保留已背调+知识库已知 |
+| `bom.py` | 报价单出同款段落，逐行按 `_family()` 判品类，**同一品牌在不同行可能是不同状态** |
+
+写操作同样要 `--authorized`（与 `blacklist.py` / `brand_dossier.py` 一套门禁）。
+档案落 `data/knowledge/whitelist.yaml`；方法论见 `references/brand-whitelist.md`。
+
 ## 判据边界（立创给不了什么 —— 以 MOSFET 为例）
 
 立创的 `paramLinkedMap` **只对少部分器件有完整参数**。实测场效应管品类（`catalogIdFilter=381`）
@@ -342,6 +379,7 @@ python brand_dossier.py render 12489                        # 出证据链报告
 | `scripts/blacklist.py` | 品牌/店铺/料号黑名单（选型与比价的硬闸门） | 纯标准库 + pyyaml |
 | `scripts/brands.py` | **品牌索引**：按品类枚举立创品牌 facet（1,296 品牌），查品牌/覆盖率体检 | 纯标准库 + pyyaml |
 | `scripts/brand_dossier.py` | **品牌背调档案**：多渠道取证 + 事实/自述/推论三级标注 + 分层判定 + 出报告 | 纯标准库 + pyyaml |
+| `scripts/whitelist.py` | **品牌白名单**：按「品牌 × 品类」放行（approved/kb_known/pending/跨品类/unknown），写操作需授权 | 纯标准库 + pyyaml |
 
 公共约定：价格为**人民币含税单价**并按数量取阶梯；结果带抓取时间；缓存默认 6 小时
 （`%LOCALAPPDATA%\bom-sourcing\cache`，`--no-cache` 关闭）。
@@ -364,6 +402,7 @@ python brand_dossier.py render 12489                        # 出证据链报告
 - `references/channels.md`：渠道与采购执行细节
 - `references/methodology.md`：**配单方法论**（D0–D9 十步决策链，每步的输入/动作/判据/常见错误）
 - `references/vendors.md`：**厂商可信度**（tier 分层、维护流程、复核周期、降级条件），机读版 `data/knowledge/vendors.yaml`
+- `references/brand-whitelist.md`：**品牌白名单规则**（为什么是「品牌 × 品类」、五态判定、引入新品牌/跨品类复核流程、写入门禁）
 - `references/brand-due-diligence.md`：**品牌背调方法论**（为什么不能只靠料号反推、11 个取证渠道、
   事实/自述/推论三级标注、分层判定规则、操作手册、落地到采购动作）
 - `references/mosfet-rules.md`：**MOSFET 判据速查**（立创能判/不能判、EAS 与 SOA 校核式、
@@ -376,7 +415,7 @@ python brand_dossier.py render 12489                        # 出证据链报告
   `industry-norms.yaml`（降额与隐性应力）、`workflow.yaml`（D0–D9 机读版）、`vendors.yaml`（145 品牌 tier）、
   `blacklist.yaml`（品牌/店铺/料号黑名单，`blacklist.py` 维护）、`brands.index.yaml`（**1,296 品牌全集**，
   `brands.py build` 自动重建，与 `vendors.yaml` 用 brand_id 关联）、`mosfet.yaml`（MOSFET 判据库）、
-  `brands.dossier/`（**品牌背调档案**，每条证据带渠道/链接/等级/把握，`brand_dossier.py` 维护）
+  `brands.dossier/`（**品牌背调档案**，每条证据带渠道/链接/等级/把握，`brand_dossier.py` 维护）、`whitelist.yaml`（品牌 × 品类放行表，`whitelist.py` 维护）
 - `references/research/`：调研证据链（`BOM-配单-调研报告.md` 总报告、`lcsc-probe.md` 立创接口、
   `market-probe.md` 淘宝/1688 实测、`taobao-pick.md` 淘宝比价实测、`github-tools.md` 现成轮子、
   `cn-knowledge.md` 行业方法论、`spec-rules.md`、`categories.md`、`methodology-survey.md`、`vendors.md`）
@@ -396,6 +435,9 @@ python brand_dossier.py render 12489                        # 出证据链报告
 - BOM 解析：CSV/TSV/XLSX/纯文本，中英列名
 - **黑名单**：品牌（`Tokmas(托克马斯)` 实测剔除 `C53133678 ULN2803CDW(TOKMAS)` 并给替代 `C7494313`）、
   店铺（淘宝店铺名带"全场包邮"等营销后缀时子串命中）、料号三组，pick/bom/taobao 默认生效
+- **品牌白名单**：按「品牌 × 品类」五态判定（`approved` / `kb_known` / `pending` /
+  `approved_other_family` / `unknown`），实测 `Tokmas` 在连接器上 `approved`、在 BJT 上 `pending`
+  （同一品牌不同品类给不同结论）；`pick.py` / `bom.py` 默认输出「品牌白名单核对」段，`--strict-brand` 只留已核过的
 - **淘宝店名**：`taobao.py search` 结果带店铺列（可直接做店铺黑白名单）
 - 指标核对：阻值/容值/电感/耐压/精度/功率/频率/封装 + MLCC/钽降额提示
 - 淘宝/1688：`taobao.py`（需真浏览器 + 淘宝登录态，走 Kimi WebBridge）；销量排序按 tab 点击，

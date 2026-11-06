@@ -428,6 +428,29 @@ def render(lines, results, args, alts=None):
             out.append(f"- `{h.get('code')}` {h.get('model')}（{h.get('brand')}）—— {why}"
                        f"{('：' + h['hits'][0]['reason']) if h.get('hits') and h['hits'][0].get('reason') else ''}")
         out.append("")
+    # 品牌白名单：按「品牌 × 品类」核对（新品牌 / 已有品牌进入非同类物料都必须先背调）
+    try:
+        import whitelist as _wl
+
+        wl_sum = {}
+        for ln, r in zip(lines, results):
+            rec = r.get("chosen")
+            if not rec:
+                continue
+            fam = _family(ln, rec) or ln.get("family")
+            st = _wl.status(rec.get("brand"), family=fam)
+            key = rec.get("brand") or "(未知品牌)"
+            s = wl_sum.setdefault(key, {"status": st["status"], "label": st["label"],
+                                        "tier": st.get("tier"), "note": st["note"],
+                                        "count": 0, "codes": []})
+            s["count"] += 1
+            if rec.get("code") and len(s["codes"]) < 5:
+                s["codes"].append(rec["code"])
+        txt = _wl.render_summary(wl_sum)
+        if txt.strip():
+            out.append(txt)
+    except Exception as e:  # 白名单坏掉不拖垮报价单
+        print(f"[警告] 品牌白名单核对失败：{e}", file=sys.stderr)
     bad = [(l, r) for l, r in zip(lines, results) if r.get("confidence") in ("close", "param_warn", "param_guess", "none", "error")]
     if bad:
         out.append("## 需人工确认\n")

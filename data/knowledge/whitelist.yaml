@@ -1,0 +1,33 @@
+schema: bom-sourcing/knowledge/whitelist
+version: 2
+generated: '2026-11-06'
+brands:
+  tokmas托克马斯:
+    name: Tokmas(托克马斯)
+    aka:
+    - 托克马斯
+    - TOKMAS
+    - 广州托克马斯电子有限公司
+    brand_id: '12489'
+    tier: original_fabless
+    approved:
+    - family: connector
+      label: 连接器/排针
+      catalog_id: '644'
+      basis: 圣禾堂（深圳）电子科技 2026-08-18 官方授权代理公告：产品线为连接器与开关元器件
+      grade: fact
+      date: '2026-11-06'
+    - family: relay
+      label: 开关/继电器
+      catalog_id: '531'
+      basis: 同上授权代理公告：轻触/拨动/船型开关属其产线
+      grade: fact
+      date: '2026-11-06'
+    pending:
+    - family: bjt
+      label: 双极型晶体管(BJT)
+      catalog_id: '326'
+      reason: 只见过 C53133678 ULN2803CDW(TOKMAS) 一条通用料号贴牌，无该品类产线/质量证据
+    note: fabless，晶圆流片与封装均代工；代理话术（1995/6亿美元）不采信
+    authorized: 傅师傅 2026-11-06 登记待办
+    dossier: data/knowledge/brands.dossier/12489-tokmas.yaml
