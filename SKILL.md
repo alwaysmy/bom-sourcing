@@ -183,6 +183,35 @@ python scripts/blacklist.py remove "Tokmas(托克马斯)" --kind brand --authori
 **店铺名**（淘宝 `it.shop.name` / 1688 `it.company`）本来就抓得到，所以淘宝侧可以按店做黑名单：
 店名常带"全场包邮""电子元件 专用"等营销后缀，所以只能子串匹配、不能整串相等。
 白名单目前是"未拉黑即放行"的语义；需要指定优先店铺时，在 `blacklist.yaml` 里另建 `shops` 之外的分组（脚本不硬编码）。
+
+## 品牌索引（这个牌子是什么 / 值不值得用）
+
+遇到不认识的品牌（如 `Tokmas(托克马斯)`），不要靠猜——查索引：
+
+```bash
+python scripts/brands.py lookup tokmas     # 按名字/中文名/别名/品牌号查
+python scripts/brands.py coverage         # 覆盖率体检（索引 vs vendors.yaml）
+python scripts/brands.py list --family mosfet   # 某品类有哪些品牌
+python scripts/brands.py build            # 重建索引（扫 26 个品类的品牌 facet，约 40 秒）
+```
+
+`data/knowledge/brands.index.yaml` 是**立创在售品牌全集**（1,296 个品牌，按品类枚举品牌 facet 得到），
+字段 `name / short / cn / aliases / families / part_count / in_vendors`。
+
+**与 `vendors.yaml` 的分工**（重要）：
+
+| 文件 | 是什么 | 谁维护 |
+|---|---|---|
+| `brands.index.yaml` | **全集**：谁在售、卖在哪些品类、多少条料 | `brands.py build` 自动重建 |
+| `vendors.yaml` | **有证据的子集**：tier / 价差 / 风险备注 | 人工 + 实测，144 个品牌 |
+
+两者用 brand_id 关联；查不到 tier 时回落 `unknown`（按"不可信"处理，不给推荐加权）。
+
+> **为什么要有索引**：`vendors.yaml` 早期是**关键词驱动采样**建的（用 "稳压""电阻" 去搜再收品牌），
+> 只卖冷门料的品牌（如只卖 ULN2803 的 Tokmas）**永远进不了采样集合**。
+> 实测覆盖率只有 22.3%（3,538 次品牌出现里 2,748 次未收录）。
+> 索引改为**按品类全量枚举**后，Tokmas 这类品牌才查得到（brand_id 12489，12 个品类，322 条料）。
+
 ## 配单流程（脚本已实现的部分标 ✅）
 
 | 步 | 做什么 | 脚本 |
@@ -228,6 +257,7 @@ python scripts/blacklist.py remove "Tokmas(托克马斯)" --kind brand --authori
 | `scripts/distributor.py` | 海外分销商检索：Mouser 中国 / DigiKey 中国（型号、库存、含税人民币价） | Kimi WebBridge daemon（两站都拦纯 HTTP） |
 | `scripts/origin.py` | **原厂官方商城**检索：19 家注册（3PEAK/TI/MPS/士兰微/兆易/圣邦微…），拿原厂价与库存基线 | 纯标准库（TI 取库存需 `--browser`） |
 | `scripts/blacklist.py` | 品牌/店铺/料号黑名单（选型与比价的硬闸门） | 纯标准库 + pyyaml |
+| `scripts/brands.py` | **品牌索引**：按品类枚举立创品牌 facet（1,296 品牌），查品牌/覆盖率体检 | 纯标准库 + pyyaml |
 
 公共约定：价格为**人民币含税单价**并按数量取阶梯；结果带抓取时间；缓存默认 6 小时
 （`%LOCALAPPDATA%\bom-sourcing\cache`，`--no-cache` 关闭）。
@@ -256,7 +286,8 @@ python scripts/blacklist.py remove "Tokmas(托克马斯)" --kind brand --authori
   功能正/反向词），是 `pick.py` 的品类解析表；人读版见 `references/research/categories.md`
 - `data/knowledge/`：`channels.yaml`（渠道选择规则）、`risk-checklist.yaml`（风险硬门）、
   `industry-norms.yaml`（降额与隐性应力）、`workflow.yaml`（D0–D9 机读版）、`vendors.yaml`（144 品牌 tier）、
-  `blacklist.yaml`（品牌/店铺/料号黑名单，`blacklist.py` 维护）
+  `blacklist.yaml`（品牌/店铺/料号黑名单，`blacklist.py` 维护）、`brands.index.yaml`（**1,296 品牌全集**，
+  `brands.py build` 自动重建，与 `vendors.yaml` 用 brand_id 关联）
 - `references/research/`：调研证据链（`BOM-配单-调研报告.md` 总报告、`lcsc-probe.md` 立创接口、
   `market-probe.md` 淘宝/1688 实测、`taobao-pick.md` 淘宝比价实测、`github-tools.md` 现成轮子、
   `cn-knowledge.md` 行业方法论、`spec-rules.md`、`categories.md`、`methodology-survey.md`、`vendors.md`）
