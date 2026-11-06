@@ -1,0 +1,22 @@
+# 黑名单 / 白名单（人工维护，可追溯）
+# 维护：python scripts/blacklist.py add|remove|list|check
+# 口径：小写、去空白、去括号后按「别名子串」匹配；只挡对应维度，不静默替换型号
+schema: bom-sourcing/knowledge/blacklist
+version: 1
+updated: '2026-11-06'
+brands:
+- name: Tokmas(托克马斯)
+  aliases:
+  - tokmas
+  - 托克马斯
+  reason: 批次一致性差，用户指定拉黑
+  added: '2026-11-06'
+  source: 用户指令 2026-11-06
+shops:
+- name: 深圳市优信电子科技有限公司
+  aliases:
+  - 优信电子
+  reason: 只卖拆机件，用户指定拉黑
+  added: '2026-11-06'
+  source: 演示
+codes: []

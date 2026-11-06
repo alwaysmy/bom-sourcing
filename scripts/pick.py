@@ -986,6 +986,14 @@ def market_compare(picked, args, n=None):
             "total": res.get("total"), "used_fallback": res.get("used_fallback"),
         })
         infos = [(x, sample_info(x)) for x in items if _market_usable(x)]
+        bl_shops = [x for x, _ in infos if x.get("shop_blacklisted")]
+        if bl_shops:
+            # 店铺黑名单：命中即不参与最低价比较，并明确说出来（否则"最便宜"可能来自被拉黑的店）
+            for x in bl_shops[:3]:
+                why = "、".join(h["name"] + (f"（{h['reason']}）" if h["reason"] else "")
+                                for h in x["shop_blacklisted"])
+                print(f"  ⛔ 黑名单店铺已排除：{model} @ {x['shop']}（{money(x.get('unit_price'))}/只）—— {why}")
+            infos = [(x, i) for x, i in infos if not x.get("shop_blacklisted")]
         with_price = [(x, i) for x, i in infos if i.get("unit_price")]
         if with_price:
             x, i = min(with_price, key=lambda xi: xi[1]["unit_price"])
@@ -1085,6 +1093,20 @@ def cmd_pick(args):
     recs = dedupe_by_model(recs)
     scanned = len(recs)
 
+    # 黑名单：品牌 / 料号维度的人为判断，必须在排序之前剔除（否则低价黑名单品牌会排到前面）
+    bl_hits = []
+    if not getattr(args, "no_blacklist", False):
+        try:
+            import blacklist as _bl
+            recs, _dropped = _bl.filter_records(recs)
+            for r, hits in _dropped:
+                bl_hits.append({"code": r.get("code"), "model": r.get("model"),
+                                "brand": r.get("brand"),
+                                "hits": [{"kind": h["kind"], "name": h["name"],
+                                          "reason": h["reason"]} for h in hits]})
+        except Exception as e:  # 黑名单坏掉不能拖垮选型
+            print(f"[警告] 黑名单加载失败，已按空处理：{e}", file=sys.stderr)
+
     ok, fails_all, unknown_dropped = [], [], []
     func_mismatch, func_unconfirmed, func_conflict = [], [], []
     pkg_fallback = []  # 封装不符、但其余约束全满足的候选（用户要求"依然列出来并说明"）
@@ -1139,6 +1161,14 @@ def cmd_pick(args):
     all_unknowns = [u for r in recs for u in evaluate(r, cs)[2]]
     render(cat, args.qty, picked, scanned, fails_stat, all_unknowns, args,
            pkg_fallback=pkg_fallback, pkg_need=pkg_need, pkg_dist=pkg_dist)
+    if bl_hits:
+        names = []
+        for h in bl_hits[:3]:
+            why = "、".join(f"{x['name']}" for x in h["hits"])
+            names.append(f"{h['model'] or h['code']}（{h['brand']}｜{why}）")
+        print(f"黑名单已剔除 {len(bl_hits)} 条：" + "；".join(names)
+              + ("…" if len(bl_hits) > 3 else "")
+              + "（改名单：`python blacklist.py list|add|remove`；本次放行加 --no-blacklist）")
     if func_mismatch:
         print(f"功能不符已剔除 {len(func_mismatch)} 条："
               + "；".join(func_mismatch[:3]) + ("…" if len(func_mismatch) > 3 else ""))
@@ -1174,6 +1204,7 @@ def cmd_pick(args):
                                       package_note=pkg_relation(pkg_need, r.get("package"))[1])
                                  for r in pkg_fallback],
             "verified": verified,
+            "blacklisted": bl_hits,
         }
         Path(args.json).write_text(json.dumps(out, ensure_ascii=False, indent=1), encoding="utf-8")
         print(f"\nJSON 已写入 {args.json}")
@@ -1244,6 +1275,8 @@ def main(argv=None):
     p.add_argument("--allow-unknown", action="store_true", help="允许缺少约束参数的料入选")
     p.add_argument("--no-func", dest="no_func", action="store_true",
                    help="关闭功能符合性校验（默认开启：滤掉名称含反向功能词的料，如把降压转换器当负载开关）")
+    p.add_argument("--no-blacklist", dest="no_blacklist", action="store_true",
+                   help="本次忽略黑名单（默认按 data/knowledge/blacklist.yaml 剔除品牌/料号）")
     p.add_argument("--taobao", type=int, default=0, metavar="N",
                    help="对前 N 个结果去淘宝/1688 查零售单只价，做渠道比价")
     p.add_argument("--no-taobao", dest="no_taobao", action="store_true",

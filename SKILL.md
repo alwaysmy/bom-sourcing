@@ -147,6 +147,34 @@ Excel 导出时选「CSV UTF-8」，中文列名能自动识别（型号/Comment
 正向/反向词表在 `data/categories.yaml` 每个 family 的 `function_keywords` / `exclude_keywords`，
 `--no-func` 可关闭该闸门（不建议）。
 
+## 黑名单 / 白名单（谁不买）
+
+选型不只要"满足参数"，还要"能买"。有些品牌/店铺/料号是**已知的坑**（批次一致性差、拆机翻新、被客户点名拉黑），
+这些不该每次靠人记。名单落在 `data/knowledge/blacklist.yaml`，三组：`brands` / `shops` / `codes`。
+
+```bash
+python scripts/blacklist.py list                       # 看名单（品牌/店铺/料号）
+python scripts/blacklist.py check "Tokmas(托克马斯)"     # 查一个名字（子串别名，大小写无关）
+python scripts/blacklist.py add "深圳市优信电子科技有限公司" --kind shop --reason "只卖拆机件" --alias "优信电子"
+python scripts/blacklist.py remove "Tokmas(托克马斯)" --kind brand
+```
+
+匹配口径：**归一化后按别名子串命中**（`Tokmas(托克马斯)` 归一成 `tokmas托克马斯`，`tokmas`、`托克马斯` 都算命中），
+不做模糊纠错（`Tokma` 不命中 `Tokmas`）—— 宁可漏杀，不可误杀。
+
+接入位置（都是默认开）：
+
+| 入口 | 行为 |
+|---|---|
+| `pick.py` | 排序前剔除，输出 `黑名单已剔除 N 条：型号（品牌｜原因）`；`--no-blacklist` 本次放行 |
+| `bom.py` | 逐行匹配后剔除，报价单出「## 黑名单剔除」段 |
+| `taobao.py` | 每条结果带 `shop_blacklisted`，命中店铺名打 `⛔` 并单列原因 |
+| `pick.py --taobao` | 比价前先排除黑名单店铺，**不让"最便宜"落在被拉黑的店** |
+
+**店铺名**（淘宝 `it.shop.name` / 1688 `it.company`）本来就抓得到，所以淘宝侧可以按店做黑名单：
+店名常带"全场包邮""电子元件 专用"等营销后缀，所以只能子串匹配、不能整串相等。
+白名单目前是"未拉黑即放行"的语义；需要指定优先店铺时，在 `blacklist.yaml` 里另建 `shops` 之外的分组（脚本不硬编码）。
+
 ## 配单流程（脚本已实现的部分标 ✅）
 
 | 步 | 做什么 | 脚本 |
@@ -191,6 +219,7 @@ Excel 导出时选「CSV UTF-8」，中文列名能自动识别（型号/Comment
 | `scripts/taobao.py` | 淘宝/1688 检索（销量/价格排序、元/包→元/只归一），走真实浏览器 | Kimi WebBridge daemon |
 | `scripts/distributor.py` | 海外分销商检索：Mouser 中国 / DigiKey 中国（型号、库存、含税人民币价） | Kimi WebBridge daemon（两站都拦纯 HTTP） |
 | `scripts/origin.py` | **原厂官方商城**检索：19 家注册（3PEAK/TI/MPS/士兰微/兆易/圣邦微…），拿原厂价与库存基线 | 纯标准库（TI 取库存需 `--browser`） |
+| `scripts/blacklist.py` | 品牌/店铺/料号黑名单（选型与比价的硬闸门） | 纯标准库 + pyyaml |
 
 公共约定：价格为**人民币含税单价**并按数量取阶梯；结果带抓取时间；缓存默认 6 小时
 （`%LOCALAPPDATA%\bom-sourcing\cache`，`--no-cache` 关闭）。
@@ -218,7 +247,8 @@ Excel 导出时选「CSV UTF-8」，中文列名能自动识别（型号/Comment
 - `data/categories.yaml`：品类索引（26 个 family → 中文品类名、立创 `catalogId`、真实参数键与取值样例、
   功能正/反向词），是 `pick.py` 的品类解析表；人读版见 `references/research/categories.md`
 - `data/knowledge/`：`channels.yaml`（渠道选择规则）、`risk-checklist.yaml`（风险硬门）、
-  `industry-norms.yaml`（降额与隐性应力）、`workflow.yaml`（D0–D9 机读版）、`vendors.yaml`（144 品牌 tier）
+  `industry-norms.yaml`（降额与隐性应力）、`workflow.yaml`（D0–D9 机读版）、`vendors.yaml`（144 品牌 tier）、
+  `blacklist.yaml`（品牌/店铺/料号黑名单，`blacklist.py` 维护）
 - `references/research/`：调研证据链（`BOM-配单-调研报告.md` 总报告、`lcsc-probe.md` 立创接口、
   `market-probe.md` 淘宝/1688 实测、`taobao-pick.md` 淘宝比价实测、`github-tools.md` 现成轮子、
   `cn-knowledge.md` 行业方法论、`spec-rules.md`、`categories.md`、`methodology-survey.md`、`vendors.md`）
@@ -236,6 +266,9 @@ Excel 导出时选「CSV UTF-8」，中文列名能自动识别（型号/Comment
 - 替代料：`list.szlcsc.com/substitute/simple/list` 免登录直接返回相似度、参数差异、人民币阶梯价
   （`C8734` 实测 36 条，含 APM32/CH32/HK32/CKS32 等国产替代；海外站同料只有 5 条）
 - BOM 解析：CSV/TSV/XLSX/纯文本，中英列名
+- **黑名单**：品牌（`Tokmas(托克马斯)` 实测剔除 `C53133678 ULN2803CDW(TOKMAS)` 并给替代 `C7494313`）、
+  店铺（淘宝 `深圳市优信电子科技有限公司 全场包邮` 子串命中）、料号三组，pick/bom/taobao 默认生效
+- **淘宝店名**：`taobao.py search` 结果带店铺列（`深圳市优信电子科技有限公司` 等），可做店铺黑白名单
 - 指标核对：阻值/容值/电感/耐压/精度/功率/频率/封装 + MLCC/钽降额提示
 - 淘宝/1688：`taobao.py`（需真浏览器 + 淘宝登录态，走 Kimi WebBridge）；销量排序按 tab 点击，
   1688 用 `sortType=va_sales360`；单只价由标题数量归一（混装包/套装会被剔除，不当作有效比价）

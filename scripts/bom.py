@@ -170,6 +170,24 @@ def _pick_best(cands, qty, pref):
     return sorted(cands, key=key, reverse=True)
 
 
+def _blacklist_filter(cands):
+    """按 data/knowledge/blacklist.yaml 剔除候选；返回 (保留, 命中描述列表)。
+
+    黑名单是人为判断（品牌/店铺/料号），必须在排序前剔除：
+    否则黑名单里的低价品牌会排到最前面被推荐。
+    """
+    try:
+        import blacklist as _bl
+    except Exception:  # noqa: BLE001 - 黑名单坏掉不能拖垮配单
+        return list(cands), []
+    kept, dropped = _bl.filter_records(cands)
+    hits = []
+    for r, hs in dropped:
+        hits.append({"code": r.get("code"), "model": r.get("model"), "brand": r.get("brand"),
+                     "hits": [{"kind": h["kind"], "name": h["name"], "reason": h["reason"]} for h in hs]})
+    return kept, hits
+
+
 def match_mpn(cli: Lcsc, line, need, pref="stock"):
     mpn = line["mpn"].strip()
     qty = line["qty"]
@@ -188,6 +206,9 @@ def match_mpn(cli: Lcsc, line, need, pref="stock"):
         if any(re.sub(r"[\s\-_/]+", "", (r.get("model") or "")).upper() == target for r in seen.values()):
             break
 
+    _kept, bl_hits = _blacklist_filter(list(seen.values()))
+    seen = {r["code"]: r for r in _kept}
+
     exact = [r for r in seen.values() if re.sub(r"[\s\-_/]+", "", (r.get("model") or "")).upper() == target]
     if exact:
         ranked = _pick_best(exact, qty, pref)
@@ -203,7 +224,7 @@ def match_mpn(cli: Lcsc, line, need, pref="stock"):
             reason = (f"同型号 {len(exact)} 个 C 号"
                       f"（品牌 {'/'.join(brands[:4])}），按{'价格' if pref == 'price' else '供货'}选了 {chosen.get('brand')}")
         return {"chosen": chosen, "candidates": ranked[:5], "confidence": "exact",
-                "reason": reason, "checks": checks}
+                "reason": reason, "checks": checks, "blacklisted": bl_hits}
 
     # 退一步：前缀/包含匹配
     near = [r for r in seen.values()
@@ -211,9 +232,11 @@ def match_mpn(cli: Lcsc, line, need, pref="stock"):
     if near:
         ranked = _pick_best(near, qty, pref)
         return {"chosen": ranked[0], "candidates": ranked[:5], "confidence": "close",
-                "reason": f"未找到完全同型号，最接近 {ranked[0]['model']}", "checks": []}
+                "reason": f"未找到完全同型号，最接近 {ranked[0]['model']}", "checks": [],
+                "blacklisted": bl_hits}
     return {"chosen": None, "candidates": [], "confidence": "none",
-            "reason": "立创无检索结果（可能停产/型号写法不同/需人工确认）", "checks": []}
+            "reason": "立创无检索结果（可能停产/型号写法不同/需人工确认）", "checks": [],
+            "blacklisted": bl_hits}
 
 
 # --------------------------------------------------------------------------- 匹配：参数行
@@ -226,11 +249,13 @@ def match_param(cli: Lcsc, line, need, pref="price"):
     try:
         res = cli.search(keyword, limit=40, sort="price_asc")
     except Exception as e:  # noqa: BLE001
-        return {"chosen": None, "candidates": [], "confidence": "error", "reason": str(e), "checks": []}
-    recs = res["records"]
+        return {"chosen": None, "candidates": [], "confidence": "error", "reason": str(e),
+                "checks": [], "blacklisted": []}
+    recs, bl_hits = _blacklist_filter(res["records"])
     if not recs:
         return {"chosen": None, "candidates": [], "confidence": "none",
-                "reason": "立创无检索结果", "checks": []}
+                "reason": "立创无检索结果（或全部命中黑名单）", "checks": [],
+                "blacklisted": bl_hits}
 
     scored = []
     for rec in recs:
@@ -251,13 +276,14 @@ def match_param(cli: Lcsc, line, need, pref="price"):
         scored.append((rank, rec, checks, worst))
     if not scored:
         return {"chosen": None, "candidates": [], "confidence": "none",
-                "reason": "有检索结果但均不满足指标（值/耐压/精度不符）", "checks": []}
+                "reason": "有检索结果但均不满足指标（值/耐压/精度不符）", "checks": [],
+                "blacklisted": bl_hits}
     scored.sort(key=lambda x: x[0], reverse=True)
     _, chosen, checks, worst = scored[0]
     cands = [s[1] for s in scored[:5]]
     conf = {"ok": "param", "warn": "param_warn", "unknown": "param_guess"}[worst]
     return {"chosen": chosen, "candidates": cands, "confidence": conf,
-            "reason": "", "checks": checks}
+            "reason": "", "checks": checks, "blacklisted": bl_hits}
 
 
 # --------------------------------------------------------------------------- 数量与渠道
@@ -392,6 +418,16 @@ def render(lines, results, args, alts=None):
     ch, why = channel_advice({"mpn": "", "description": ""}, None, qty_all)
     out.append(f"- 整体渠道建议（{qty_all} 件）: **{ch}** —— {why}")
     out.append("")
+    out.append("")
+    bl_all = [h for r in results for h in (r.get("blacklisted") or [])]
+    if bl_all:
+        out.append("## 黑名单剔除\n")
+        out.append("名单：`data/knowledge/blacklist.yaml`（`python scripts/blacklist.py list|add|remove` 维护）")
+        for h in bl_all[:20]:
+            why = "、".join(f"{x['name']}" for x in h.get("hits") or [])
+            out.append(f"- `{h.get('code')}` {h.get('model')}（{h.get('brand')}）—— {why}"
+                       f"{('：' + h['hits'][0]['reason']) if h.get('hits') and h['hits'][0].get('reason') else ''}")
+        out.append("")
     bad = [(l, r) for l, r in zip(lines, results) if r.get("confidence") in ("close", "param_warn", "param_guess", "none", "error")]
     if bad:
         out.append("## 需人工确认\n")

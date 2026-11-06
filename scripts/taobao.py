@@ -300,6 +300,35 @@ def search_taobao(br, keyword, sort, limit, max_scrolls, fallback=True):
             "注意这不是反爬——登录墙下 window.__last_search_params 仍然正常。")
 
     max_items = min(200, max(48, limit * 2))
+
+    def _wait_cards(seconds=12.0, floor=5):
+        """等卡片回来：点排序 tab 会触发整页重渲染，卡片节点先消失再回来。"""
+        end = time.time() + seconds
+        while time.time() < end:
+            n = eval_json(br, "JSON.stringify(document.querySelectorAll('[class*=\"Card\"]').length)")
+            try:
+                n = int(n)
+            except (TypeError, ValueError):
+                n = 0
+            if n >= floor:
+                return n
+            time.sleep(0.6)
+        return 0
+
+    cards = _wait_cards()
+    if not cards:
+        # 点完 tab 结果区没回来（实测淘宝偶发：整页只有导航和 AI 摘要，卡片 0）。
+        # 退回「不点 tab 的干净搜索页」重取，排序改由客户端做（sort_items 已支持）。
+        br.navigate(f"https://s.taobao.com/search?q={quote(keyword)}",
+                    new_tab=False, group_title=GROUP_TITLE)
+        time.sleep(1.2)
+        cards = _wait_cards(seconds=15.0)
+        if cards:
+            state["recovered"] = True
+            state["clickFailed"] = True
+    if cards:
+        state["cardCount"] = cards
+
     items, data, res, used_fallback, fb_params = _taobao_read(br, max_items, max_scrolls, fallback)
     if fb_params is not None:
         state["fallbackParams"] = fb_params
@@ -359,6 +388,32 @@ def search_1688(br, keyword, sort, limit):
 
 
 # --------------------------------------------------------------------------- 归一 + 排序
+def _shop_name(it):
+    """店铺名：DOM 抽取给 {"name": ...}，也兼容直接是字符串（不同站点/版本）。"""
+    raw = it.get("shop")
+    if isinstance(raw, dict):
+        return raw.get("name") or ""
+    return raw or ""
+
+
+def _shop_badges(it):
+    """店铺标签：{"badges": [...]} 或扁平 badges，两种都容忍。"""
+    raw = it.get("shop")
+    if isinstance(raw, dict) and raw.get("badges"):
+        return raw["badges"]
+    return it.get("badges") or []
+
+
+def _shop_blacklist(shop):
+    """店铺名查黑名单（data/knowledge/blacklist.yaml 的 shops）；坏掉不影响检索。"""
+    try:
+        import blacklist as _bl
+    except Exception:  # noqa: BLE001
+        return []
+    return [{"name": h["name"], "alias": h["alias"], "reason": h["reason"]}
+            for h in _bl.check_shop(shop)]
+
+
 def normalize(items, site):
     out = []
     for it in items:
@@ -387,8 +442,9 @@ def normalize(items, site):
             "unit_confidence": conf,
             "sales_text": it.get("salesText") or "",
             "sales_count": it.get("salesCount"),
-            "shop": (it.get("shop") or {}).get("name") or "",
-            "shop_badges": (it.get("shop") or {}).get("badges") or it.get("badges") or [],
+            "shop": _shop_name(it),
+            "shop_badges": _shop_badges(it),
+            "shop_blacklisted": _shop_blacklist(_shop_name(it)),
             "location": it.get("location"),
             "repeat_rate": it.get("repeatRate"),
             "sponsored": bool(it.get("sponsored")),
@@ -433,7 +489,16 @@ def render_md(res, site, keyword, sort, limit, elapsed):
             unit = "区间价"
         sales = x["sales_text"] or ("月销/回头率 " + str(x["repeat_rate"]) + "%" if x["repeat_rate"] else "—")
         shop = cut(x["shop"], 18) or "—"
+        if x.get("shop_blacklisted"):
+            shop = "⛔" + shop
         print(f"| {i} | {cut(x['title'], 46).replace('|', '/')} | {price} | {unit} | {sales} | {shop} | {x['url']} |")
+    bl = [(i, x) for i, x in enumerate(items, 1) if x.get("shop_blacklisted")]
+    if bl:
+        print()
+        for i, x in bl:
+            why = "、".join(h["name"] + (f"（{h['reason']}）" if h["reason"] else "")
+                            for h in x["shop_blacklisted"])
+            print(f"- ⛔ 第 {i} 条店铺命中黑名单：{x['shop']} —— {why}（`python blacklist.py list`）")
     print()
     print(f"- 实际 URL：{res['url']}")
     if site == "taobao":
