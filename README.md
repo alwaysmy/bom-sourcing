@@ -35,6 +35,11 @@
   用原厂价当"会不会买到翻新/散新"的基线。
 - **功能符合性**：立创品类按采购口径分，`功率电子开关` 里混着降压转换器；`pick.py` 用商品名功能词做
   四态判定（ok/mismatch/conflict/unknown），挡掉"参数满足但功能不对"的料。
+- **品牌背调**：`brand_dossier.py` 把"这个牌子能不能用"做成证据链 —— 11 个取证渠道（官网/商标/工商/
+  授权代理/资料站/社区/分销页…），每条证据带**事实 / 自述 / 推论**三级标注与把握度，按证据算
+  tier 分层，没查到的写进 gaps。写操作需 `--authorized`（与黑名单同一套门禁）。
+- **判据知识库**：`data/knowledge/mosfet.yaml`（EAS 雪崩能量、SOA 校核、工艺反推的
+  fact/inference 分级、9 类应用语义）+ `brands.index.yaml`（1,296 品牌全集）+ `vendors.yaml`（145 品牌 tier）。
 
 ## 安装
 
@@ -53,9 +58,12 @@ scripts/spec.py       参数解析与指标比对
 scripts/taobao.py     淘宝/1688 检索（WebBridge 登录态）
 scripts/distributor.py  Mouser 中国 / DigiKey 中国检索（WebBridge 登录态）
 scripts/blacklist.py     品牌 / 店铺 / 料号黑名单（pick、bom、taobao 默认生效；写操作需 --authorized）
-data/categories.yaml  25 family 的品类 id、参数键与关键约束
+scripts/brands.py        品牌索引（按品类枚举立创品牌 facet，1,296 品牌）
+scripts/brand_dossier.py 品牌背调档案（多渠道取证 + 事实/自述/推论三级标注 + 分层判定）
+data/categories.yaml  26 family 的品类 id、参数键与关键约束
 data/spec-rules.yaml  32 family 的 critical/relaxable 参数、降额基准、风险备注
-references/           API 事实、指标判据、找料实现、渠道配方、调研证据链
+data/knowledge/       渠道、风险、降额、工作流、厂商 tier、黑名单、品牌索引、MOSFET 判据、品牌档案
+references/           API 事实、指标判据、找料实现、渠道配方、品牌背调方法论、调研证据链
 ```
 
 ## 边界
@@ -65,6 +73,11 @@ references/           API 事实、指标判据、找料实现、渠道配方、
 - 淘宝销量必须点「销量」tab（URL 参数无效）；淘宝「价格」tab 点击无效，价格只能客户端排序。
 - 1688 只需 URL 参数即可按销量排序，但阶梯价拿不到 → 走量必须人工询盘。
 - 立创商城与嘉立创 SMT 的库存/价格彼此独立，商城料不能随 PCB 寄。
+- **品牌背调**：工商原始登记页（企查查/天眼查）需付费登录；立创品牌页走普通抓取只回反爬页，
+  需真浏览器；社区检索噪声大（"托克马斯"同时命中杭州托马克机电、江西托克马克、加拿大箱包商标），
+  必须区分同名实体；**没有第三方质量数据 ≠ 质量好**，只能记进 gaps。
+- **MOSFET 抗冲击**：EAS / SOA / 热阻 / Tjmax 在立创全部 0% 覆盖，只能 `detail --pdf` 取手册后人工判；
+  自动判定只能做电气初筛，不能给"通过"结论。
 
 ## 环境坑
 

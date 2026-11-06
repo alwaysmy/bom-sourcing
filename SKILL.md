@@ -212,6 +212,46 @@ python scripts/brands.py build            # 重建索引（扫 26 个品类的�
 > 实测覆盖率只有 22.3%（3,538 次品牌出现里 2,748 次未收录）。
 > 索引改为**按品类全量枚举**后，Tokmas 这类品牌才查得到（brand_id 12489，12 个品类，322 条料）。
 
+## 品牌背调（这个牌子能不能用、能不能追溯）
+
+**索引只回答"这个牌子在不在售"，回答不了"能不能用"。** 判断品牌可信度必须**上网查资料**：
+
+```bash
+cd scripts
+python brand_dossier.py new 12489 --name "Tokmas(托克马斯)" --alias 托克马斯 --authorized "<谁/何时/为什么>"
+python brand_dossier.py add 12489 --channel trademark --url "https://..." \
+    --claim "商标 18357895 归属广州托克马斯电子有限公司" --grade fact --confidence high --authorized "..."
+python brand_dossier.py add 12489 --channel agent_site --url "https://..." \
+    --claim "宣称 1995 年成立、年销售额 6 亿美元，多站同文" --grade claim --confidence low --authorized "..."
+python brand_dossier.py tier 12489 --authorized "..."      # 按证据算建议分层
+python brand_dossier.py render 12489                        # 出证据链报告
+```
+
+**取证渠道**（按可信度排序，详见 `references/brand-due-diligence.md`）：品牌官网 · 官方文档/认证 ·
+商标公告 · 工商登记 · 授权代理公告 · IC 资料站 · 立创品牌页 · 分销商页 · 社区口碑 · 代理商自述 · 推论。
+
+**三级标注是硬约束**（`CLAIM_ONLY` 渠道写 `--grade fact` 直接报错）：
+
+| 等级 | 含义 | 例 |
+|---|---|---|
+| `fact` | 可点开链接复核 | 商标注册号 18357895 归属该主体 |
+| `claim` | 对方自述，无第三方佐证 | 「1995 年成立、年销售额超 6 亿美元」 |
+| `inference` | 由事实推出 | 「自述流片封装均代工 + 有授权代理 → fabless」 |
+
+> **inference 不得单独作为「可用」判据**，只能作进一步查证的方向；结论靠 inference 撑着时必须写进 `gaps`。
+
+**分层判定**（只认 fact 级证据）：自有产线证据 → `original_idm`；自有品牌 + 代工/授权代理 →
+`original_fabless`；只有品牌资料无产线 → `domestic_second`；只有目录/分销页 → `trader`；
+什么都没有 → `unknown`。人工可覆盖，但 `--tier` 必须配 `--reason`。
+
+> **写操作门禁**：`new / add / meta / gaps / conclusion / tier` 全部要求
+> `--authorized "<谁/什么时候/为什么>"`——品牌结论属知识库写操作，只有用户明确指定的核查才能落库
+> （与 `blacklist.py` 同一套纪律）。
+
+档案落 `data/knowledge/brands.dossier/<brand_id>-<slug>.yaml`，`vendors.yaml` 条目的
+`dossier` 字段指回档案；样例：`data/knowledge/brands.dossier/12489-tokmas.yaml`
+（Tokmas：8 条证据 = 5 事实 + 2 自述 + 1 推论，5 条 gaps，tier=original_fabless）。
+
 ## 判据边界（立创给不了什么 —— 以 MOSFET 为例）
 
 立创的 `paramLinkedMap` **只对少部分器件有完整参数**。实测场效应管品类（`catalogIdFilter=381`）
@@ -235,8 +275,21 @@ python scripts/brands.py build            # 重建索引（扫 26 个品类的�
 
 - 自动判定只能覆盖"电气初筛"，**不能给"通过"结论**；
 - 抗冲击（EAS / SOA）、工艺类型、线性 vs 开关、缓启动 —— 这些**必须落到手册 + 人工确认**；
-- 输出里对 C/D 级判据只能写"待确认"，不能写"满足"；
-- 判据草案见 `references/research/mosfet-selection.md`（900 行）与 `mosfet-rules.draft.yaml`（待审核）。
+- 输出里对 C/D 级判据只能写"待确认"，不能写"满足"。
+
+**判据已入库**：`data/knowledge/mosfet.yaml`（机读，6 条 critical + 16 条 datasheet_only +
+9 类应用语义 + EAS/SOA 校核式 + 工艺反推 8 条规则），人读版 `references/mosfet-rules.md`。
+
+**EAS / SOA / 工艺** 三条最容易踩的：
+
+- **EAS**：`E_AS = ½·L·i_AS(0)²·V_DS,peak/(V_DS,peak−V_DD)`，余量 2.0×；VDD 是否在雪崩中断开会差 20%；
+  缺 EAS 额定值 → 只能 `NEED_DATASHEET`。
+- **SOA**：**必须查手册**。①SOA 是实测曲线不是算出来的；②线性区低于 ZTC 点时 `∂I_D/∂T > 0` 是正反馈，
+  "平均结温 < Tjmax 所以安全"物理上就是错的（Spirito 2005 判据）；③SOA 前提是单元一致性 + 焊层完整 +
+  热阻均匀，立创一条字段都反映不了。
+- **工艺类型**：手册首页（Planar/Trench/SGT/Superjunction）= **fact**；型号家族名 / 命名规律 /
+  Vdss 与 RDS 横向对比 = **inference**。应用是线性/缓启动/热插拔时，只有 inference 的必须写
+  「疑似 X，需查手册确认」。
 
 **已知接口限制**：参数区间**无服务端筛选**；关键词里的数字是**精确等于**不是 `≥`
 （`N沟道 30V 5A` 只返 Vdss=30 且 Id=5，5.7A 的料反而不出现）；
@@ -288,6 +341,7 @@ python scripts/brands.py build            # 重建索引（扫 26 个品类的�
 | `scripts/origin.py` | **原厂官方商城**检索：19 家注册（3PEAK/TI/MPS/士兰微/兆易/圣邦微…），拿原厂价与库存基线 | 纯标准库（TI 取库存需 `--browser`） |
 | `scripts/blacklist.py` | 品牌/店铺/料号黑名单（选型与比价的硬闸门） | 纯标准库 + pyyaml |
 | `scripts/brands.py` | **品牌索引**：按品类枚举立创品牌 facet（1,296 品牌），查品牌/覆盖率体检 | 纯标准库 + pyyaml |
+| `scripts/brand_dossier.py` | **品牌背调档案**：多渠道取证 + 事实/自述/推论三级标注 + 分层判定 + 出报告 | 纯标准库 + pyyaml |
 
 公共约定：价格为**人民币含税单价**并按数量取阶梯；结果带抓取时间；缓存默认 6 小时
 （`%LOCALAPPDATA%\bom-sourcing\cache`，`--no-cache` 关闭）。
@@ -310,14 +364,19 @@ python scripts/brands.py build            # 重建索引（扫 26 个品类的�
 - `references/channels.md`：渠道与采购执行细节
 - `references/methodology.md`：**配单方法论**（D0–D9 十步决策链，每步的输入/动作/判据/常见错误）
 - `references/vendors.md`：**厂商可信度**（tier 分层、维护流程、复核周期、降级条件），机读版 `data/knowledge/vendors.yaml`
+- `references/brand-due-diligence.md`：**品牌背调方法论**（为什么不能只靠料号反推、11 个取证渠道、
+  事实/自述/推论三级标注、分层判定规则、操作手册、落地到采购动作）
+- `references/mosfet-rules.md`：**MOSFET 判据速查**（立创能判/不能判、EAS 与 SOA 校核式、
+  工艺反推的 fact/inference 分级、9 类应用语义、已修缺陷），机读版 `data/knowledge/mosfet.yaml`
 - `data/spec-rules.yaml`：32 个器件 family 的可机读规则（critical/relaxable 参数、默认型号库、风险备注），
   人读版见 `references/research/spec-rules.md`
 - `data/categories.yaml`：品类索引（26 个 family → 中文品类名、立创 `catalogId`、真实参数键与取值样例、
   功能正/反向词），是 `pick.py` 的品类解析表；人读版见 `references/research/categories.md`
 - `data/knowledge/`：`channels.yaml`（渠道选择规则）、`risk-checklist.yaml`（风险硬门）、
-  `industry-norms.yaml`（降额与隐性应力）、`workflow.yaml`（D0–D9 机读版）、`vendors.yaml`（144 品牌 tier）、
+  `industry-norms.yaml`（降额与隐性应力）、`workflow.yaml`（D0–D9 机读版）、`vendors.yaml`（145 品牌 tier）、
   `blacklist.yaml`（品牌/店铺/料号黑名单，`blacklist.py` 维护）、`brands.index.yaml`（**1,296 品牌全集**，
-  `brands.py build` 自动重建，与 `vendors.yaml` 用 brand_id 关联）
+  `brands.py build` 自动重建，与 `vendors.yaml` 用 brand_id 关联）、`mosfet.yaml`（MOSFET 判据库）、
+  `brands.dossier/`（**品牌背调档案**，每条证据带渠道/链接/等级/把握，`brand_dossier.py` 维护）
 - `references/research/`：调研证据链（`BOM-配单-调研报告.md` 总报告、`lcsc-probe.md` 立创接口、
   `market-probe.md` 淘宝/1688 实测、`taobao-pick.md` 淘宝比价实测、`github-tools.md` 现成轮子、
   `cn-knowledge.md` 行业方法论、`spec-rules.md`、`categories.md`、`methodology-survey.md`、`vendors.md`）

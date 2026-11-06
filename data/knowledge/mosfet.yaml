@@ -1,0 +1,613 @@
+# =============================================================================
+# MOSFET 选型判据知识库（机读版）
+#
+# 用途：把「MOSFET 怎么选」拆成可判定的判据，并且**明确哪些能被立创接口自动判定、
+#       哪些必须查手册**。pick.py / bom.py 用 critical 做硬约束，用 datasheet_only
+#       生成「待确认清单」；energy_check / thermal_check 只在拿到手册数据时才给结论。
+#
+# 证据等级（与 vendors.yaml 一致）：
+#   official  = 标准/手册原文（IEC 60747-8、JEDEC JESD24-5、AEC-Q101、原厂 datasheet）
+#   measured  = 本仓 probe/mosfet/ 的实测（330 条去重记录、参数键覆盖率）
+#   secondary = 行业媒体 / 分销商页面
+#   experience= 通行经验，可被人工推翻
+#
+# 关键结论（先看这条再往下）：
+#   立创只有 4 个参数键能撑起自动判定 —— 漏源电压(Vdss) / 连续漏极电流(Id) /
+#   导通电阻(RDS(on))（100% 带 @Vgs 条件）/ 沟道类型(数量)。Pd/Vgs(th) 覆盖率 <1%；
+#   Qg、Ciss、Rds 热阻、Tjmax、EAS、EAR、SOA 曲线、工艺类型、AEC-Q101、EOL
+#   **全部 0%**。所以：自动判定只能做电气初筛，不能给「通过」结论。
+#
+# 人读版：references/mosfet-rules.md；研究过程：research/mosfet-selection.md
+# 维护约定：
+#   1. 新增判据必须写 evidence + 来源；无来源的写 experience 并标 confidence: low
+#   2. 参数键名一律用立创 paramLinkedMap 的原文（含括号与大小写）
+#   3. 「工艺类型」这类只能推断的字段，必须走 process_inference + 明确标注推论
+# =============================================================================
+
+schema: bom-sourcing/knowledge/mosfet
+version: 1
+generated: '2026-11-06'
+locale: zh-CN
+purpose: MOSFET 选型的判据库：把「电气/热/雪崩/工艺/应用语义/可靠性」拆成可判定项，并标注哪些能自动判定、哪些必须查手册。
+evidence_policy:
+  principle: 任何一条结论都要能回答：这是「查到的」还是「推出来的」。查到的给出来源链接/手册页；推出来的必须标注 inference 并写出推理链。
+  grades:
+    fact: 检索到的事实：标准条款、手册表格/曲线、原厂产品页、立创参数字段原文
+    inference: 由事实推出：例如「型号名含 Trench → 沟槽工艺」「Vdss≥500V 且 RDS 远低于同压平面器件 → 超结」
+    claim: 厂商/代理自述：营销话术、无第三方佐证的宣传语
+  output_rule: 输出里 fact 与 inference 必须分列；inference 不得单独作为「可用」的判据，只能作为「建议进一步查证的方向」。
+  never_infer:
+  - SOA 曲线数值（只能实测/手册，不能算）
+  - EAS / EAR 具体数值（不同厂商测试条件不同）
+  - Tjmax 与热阻（必须手册）
+  - AEC-Q101 是否通过（必须证书）
+  - 是否 EOL/停产（必须 PCN/公告）
+mosfet:
+  display: MOSFET
+  lcsc_category:
+  - 场效应管(MOSFET)
+  lcsc_catalog_id: 381
+  mall_params_observed:
+  - key: 漏源电压(Vdss)
+    coverage: 1.0
+    parse_rate: 0.997
+    unit: V
+  - key: 连续漏极电流(Id)
+    coverage: 1.0
+    parse_rate: 0.936
+    unit: A
+    note: 21/330 为 mA（如 115mA/300mA）或双值（32A；17A），需单位换算 + 取较大值
+  - key: 导通电阻(RDS(on))
+    coverage: 1.0
+    parse_rate: 1.0
+    unit: ohm
+    note: 100% 带 @Vgs 条件；282 条 mΩ / 18 条 Ω；28 条多条件；2 条带测试电流 (10V,3A)
+  - key: 数量
+    coverage: 0.99
+    parse_rate: 0.988
+    unit: null
+    note: 实为沟道类型：1个N沟道 / 1个P沟道 / 2个N沟道 / 1个N沟道+1个P沟道；3 条空串
+  mall_params_near_zero:
+  - key: 耗散功率(Pd)
+    coverage: 0.007
+    verdict: 禁止使用
+  - key: 阈值电压(Vgs(th))
+    coverage: 0.003
+    verdict: 禁止使用
+  mall_params_absent:
+  - Qg
+  - Qgs
+  - Qgd
+  - Ciss
+  - Coss
+  - Crss
+  - Qrr
+  - trr
+  - EAS
+  - EAR
+  - SOA
+  - Rθja
+  - Rθjc
+  - Vgs(max)
+  - Tjmax
+  - 工艺
+  - AEC-Q101
+  - EOL
+  parse_contract:
+    polarity_is_always_positive:
+      rule: P 沟道器件的 Vdss / Id 在立创里记为正数（AO3401A 记 30V / 4.2A）
+      consequence: 禁止用符号判断极性；极性只能从 `数量` 键读
+      severity: P0
+    rds_on_condition:
+      rule: RDS(on) 必须带 @Vgs 比较，禁止跨条件比大小
+      evidence: AO3401A 同时给出 47mΩ@10V；85mΩ@2.5V；60mΩ@4.5V，同一颗差 1.8 倍
+      distribution:
+        10V: 0.639
+        4.5V: 0.191
+        2.5V: 0.04
+        multi: 0.094
+        other: 0.036
+      severity: P0
+    rds_on_unit:
+      rule: mΩ → 1e-3 Ω；Ω → 1.0
+      bug_ref: spec.py:117 parse_ohm 的单位类 ([kKMGRr]?) 漏掉 m/u/µ/n/p
+      severity: P0
+    channel_type:
+      key: 数量
+      values:
+        1个N沟道:
+          polarity: N
+          channels: 1
+        1个P沟道:
+          polarity: P
+          channels: 1
+        2个N沟道:
+          polarity: N
+          channels: 2
+        1个N沟道+1个P沟道:
+          polarity: complementary
+          channels: 2
+        ? ''
+        : polarity: unknown
+          channels: unknown
+          action: 不得默认 N
+    html_highlight:
+      rule: 命中关键词的参数值会带 <SPAN CLASS='LUCENE_HIGHLIGHT_CLASS'>…</SPAN>
+      action: 任何直接调 _post 的代码必须先 strip_html（raw_search 已处理）
+      severity: P1
+    dual_value:
+      rule: Vdss/Id 可能出现 `30V；30V` / `32A；17A` 双值（双芯片或双规格）
+      action: 取较大值并标记 dual_die=true
+    kv_unit:
+      rule: kV → 1e3 V（样本 STH3N150-2 = 1.5kV）
+  search_strategy:
+    server_levers:
+    - keyword
+    - catalogIdFilter
+    - brandIdFilter
+    - standardFilter
+    - startPrice
+    - endPrice
+    - sortNumber
+    - spotFilter
+    keyword_number_semantics: exact_equality
+    keyword_degrades_to_fuzzy: true
+    total_count_cap: 1500
+    count_page_cap: 50
+    no_parametric_range_filter: true
+    recommended:
+    - 电压用精确（30V 是真实档位），电流不要塞进关键词，客户端做 Id >=
+    - 结果集逐条校验 Vdss == 查询值，剔除模糊降级噪声
+    - totalCount < 1500 才可信；= 1500 只说明 >=1500
+    - 要全量枚举必须按 Vdss 或封装切片，每片 < 1500
+  required_to_specify:
+  - vdss
+  - id
+  - rds_on
+  - vgs_th
+  - package
+  - channel_type
+  critical:
+  - key: vdss
+    lcsc_key: 漏源电压(Vdss)
+    unit: V
+    cmp: gte_margin
+    margin: 1.5
+    tier: A
+    conf: E
+    note: Vds >= 1.5x 最高漏源电压；感性负载（电机/继电器/变压器）取 2x（雪崩能量预算，见 energy_check）
+  - key: id
+    lcsc_key: 连续漏极电流(Id)
+    unit: A
+    cmp: gte_margin
+    margin: 1.3
+    tier: A
+    conf: E
+    note: 'Id 是 Tc=25℃ 的理想值，不是可用电流。
+
+      实际必须用 RDS(on) 的 I²R 损耗 + 热阻复核（tier D）。
+
+      P 沟道器件的 Id 也是正数，靠 `数量` 判极性。
+
+      '
+  - key: rds_on
+    lcsc_key: 导通电阻(RDS(on))
+    unit: ohm
+    cmp: lte
+    tier: A
+    conf: D
+    requires_condition: '@Vgs'
+    note: "必须同 @Vgs 条件比较。温度折算：\n  R_DS(on)(Tj) = R_DS(on)(25℃) × (1 + α(Tj − 25))，\n\
+      \  α ≈ 0.004~0.006 /℃，须用 datasheet 的 Normalized RDS(on) vs Tj 曲线校准。\n低圧沟槽 30V\
+      \ 级实测常达 ×1.8 @125℃；高圧超结约 ×1.4。默认取 1.5。\n"
+  - key: channel_type
+    lcsc_key: 数量
+    unit: null
+    cmp: enum_equal
+    tier: A
+    conf: S
+    note: N 沟道 / P 沟道不可互换；2个N沟道 与 1个N沟道 的 Id/RDS 是每通道值，价格需按通道折算
+  - key: package
+    lcsc_key: 封装
+    unit: null
+    cmp: enum_compatible
+    tier: A
+    conf: S
+    note: 49 种写法需归一；PowerPAK-SO-8L / TDSON-8 / PowerPAK1212-8S 是厂商专有封装，不得并入标准 SO-8
+  - key: vgs_th
+    lcsc_key: 阈值电压(Vgs(th))
+    unit: V
+    cmp: drive_compatible
+    tier: C
+    coverage: 0.003
+    conf: D
+    fallback: name 含 `逻辑电平` 作 B 级推断（330 条里 3 条）；否则必须查手册
+    note: 3.3V MCU 直驱需 Vgs(th) <= 1.5V 且 RDS(on)@2.5V 已达标；1.8V 直驱需 <= 0.9V
+  datasheet_only:
+  - key: Pd_tc25
+    unit: W
+    reason: 覆盖率 0.7%，不可用；且 Pd@Tc 与 Pd@Ta 差 3 倍
+  - key: vgs_max
+    unit: V
+    reason: 栅氧上限，典型 ±20V；±12V 料影响自举
+  - key: qg
+    unit: nC
+    reason: 驱动损耗 P_drive = Qg × Vgs × f_sw
+  - key: ciss
+    unit: pF
+    reason: 仅用于估 t_rise ≈ Qg/I_g
+  - key: coss
+    unit: pF
+    reason: E_oss = ½·Coss·V²，软开关必需
+  - key: qrr
+    unit: nC
+    reason: 同步整流/桥式必需；name 含 `低QRR` 仅 B 级线索（1 条）
+  - key: trr
+    unit: ns
+    reason: 体二极管反向恢复，硬开关桥式必需
+  - key: rthjc
+    unit: K/W
+    reason: 结到壳，可由 Pd@Tc 与 Tjmax 反推
+  - key: rthja
+    unit: K/W
+    reason: 随 PCB 铜箔面积变化 2~3 倍，不可跨封装套用
+  - key: tjmax
+    unit: ℃
+    reason: 默认 150（工业）/175（车规），标注为假设
+  - key: eas
+    unit: mJ
+    reason: 单脉冲雪崩能量，见 energy_check
+  - key: ear
+    unit: mJ
+    reason: 重复雪崩能量；IR 历史惯例 = 25℃ Pd 的 1/10000
+  - key: soa
+    unit: A×V
+    reason: 实测曲线，非计算值；线性区/缓启动/热插拔必须逐点核
+  - key: zth_curve
+    unit: K/W
+    reason: 瞬态热阻抗，雪崩/脉冲校核必需
+  - key: vav_dss
+    unit: V
+    reason: 雪崩钳位电压，无实测值时取 1.2×Vdss 估算
+  - key: process
+    unit: null
+    reason: Planar/Trench/SGT/SJ，立创 0 字段
+  process_inference:
+    processes:
+      planar:
+        cn: 平面管
+        rds_qg: 差
+        avalanche: 最强
+        linear_soa: 最好
+        voltage: '>=200V'
+      trench:
+        cn: 沟槽管
+        rds_qg: 好
+        avalanche: 中
+        linear_soa: 中
+        voltage: 30~200V
+      sgt:
+        cn: 屏蔽栅
+        rds_qg: 最好
+        avalanche: 中偏差
+        linear_soa: 差
+        voltage: 25~150V
+      superjunction:
+        cn: 超结
+        rds_qg: 极好
+        avalanche: 差
+        linear_soa: 差
+        voltage: '>=500V'
+    evidence:
+    - rule: name 含 超结/SJ
+      hit: 20
+      tier: 强
+      conf: 0.9
+      grade: fact
+      grade_basis: 型号名是厂商公开命名，可直接检索复核
+    - rule: name 含 Trench
+      hit: 17
+      tier: 强
+      conf: 0.9
+      grade: fact
+      grade_basis: 型号名是厂商公开命名，可直接检索复核
+    - rule: name 含 OptiMOS
+      hit: 2
+      tier: 强
+      conf: 0.8
+      note: Infineon 沟槽系列名
+      grade: fact
+      grade_basis: Infineon 官方产品系列名
+    - rule: Vdss >= 500V 且 RDS(on) 显著低于同压平面管
+      tier: 中
+      conf: 0.6
+      grade: inference
+      grade_basis: 由参数对比推出：超结结构在高压下 RDS·A 优于平面，但需同封装同测试条件对比
+    - rule: 同封装下 RDS(on) 明显更低
+      tier: 中
+      conf: 0.5
+      grade: inference
+      grade_basis: 同上，属横向对比推论
+    - rule: 型号命名（Infineon ...P7 = CoolMOS 超结；IRFxxx = 平面；IRLxxx = 逻辑电平沟槽）
+      tier: 弱
+      conf: 0.4
+      note: 需品牌白名单
+      grade: inference
+      grade_basis: 命名规律来自厂商命名手册，跨厂商不通用；仅对已收录家族有效
+    - rule: 品牌档位
+      tier: 弱
+      conf: 0.3
+      grade: inference
+      grade_basis: 由品牌产品线推断，非该型号的直接证据
+    - rule: 封装（TO-247 多高压平面/超结；DFN5x6 多低压 SGT）
+      tier: 很弱
+      conf: 0.2
+      grade: inference
+      grade_basis: 统计规律（330 条样本），存在反例，不能单独定论
+    not_detectable:
+    - Planar
+    - SGT
+    - 屏蔽栅
+    hard_rule: 应用 ∈ {linear, soft_start, hot_swap} 时，工艺不可判 → 必须查手册
+    grade_legend:
+      fact: 型号名/官网分类等可检索复核的证据
+      inference: 由证据推出的结论，必须写明推理链
+  application_semantics:
+    low_side_switch:
+      priority:
+      - rds_on
+      - vdss
+      - id
+      - vgs_th
+      - qg
+      conformable: true
+    load_switch:
+      priority:
+      - rds_on
+      - vdss
+      - id
+      - qg
+      - eas
+      conformable: true
+    synchronous_rect:
+      priority:
+      - rds_on
+      - qrr_trr
+      - vgs_th
+      - coss
+      - vdss
+      conformable: false
+      missing:
+      - qrr_trr
+      - coss
+    oring:
+      priority:
+      - rds_on
+      - vgs_th
+      - qg
+      - vdss
+      conformable: partial
+      missing:
+      - vgs_th
+    motor_drive:
+      priority:
+      - vdss_2x
+      - rds_on
+      - eas
+      - qg
+      - vgs_th
+      conformable: partial
+      missing:
+      - eas
+      - qg
+    linear_mode:
+      priority:
+      - soa
+      - tjmax
+      - rthjc
+      - vdss
+      - rds_on_high
+      conformable: false
+      missing:
+      - soa
+      - tjmax
+      - rthjc
+      - process
+      hard: 禁止输出通过；SOA 是实测曲线，无法计算
+    soft_start_inrush:
+      priority:
+      - soa_at_t
+      - vdss
+      - tjmax
+      - rthjc
+      - ciss
+      conformable: false
+      missing:
+      - soa
+      - zth_curve
+      - rthjc
+    hot_swap:
+      priority:
+      - soa
+      - rds_on
+      - tjmax
+      - vdss
+      - qg
+      conformable: false
+      missing:
+      - soa
+      - tjmax
+    small_signal:
+      priority:
+      - vds
+      - rds_on
+      - vgs_th
+      - ciss
+      conformable: true
+  thermal_check:
+    formulas:
+      tj_no_heatsink: Tj = Ta + P × Rθja
+      tj_with_heatsink: Tj = Ta + P × (Rθjc + Rθcs + Rθsa)
+      rds_temp: R_DS(on)(Tj) = R_DS(on)(25℃) × (1 + α(Tj − 25))
+      derating_curve: P_D(Tc) = (Tjmax − Tc)/(Tjmax − 25) × P_D(25℃)
+    defaults:
+      alpha: 0.0045
+      rth_cs: 1.0
+      tjmax: 150
+      design_margin: 0.8
+    warn: Pd@Tc=25℃ 只反映 Rθjc；Pd@Ta=25℃ 反映 Rθja。SOT-23 两者差 3 倍以上。
+  energy_check:
+    standards:
+    - IEC 60747-8:2010+AMD1:2021 §6.2.3.2（非重复雪崩能量）/ Fig.16（感性雪崩开关电路）/ Fig.18（I_D/V_DS/V_GS
+      波形）
+    - JEDEC JESD24-5（Single Pulse UIS Avalanche Test Method, 1990/R2002）
+    - AEC-Q101 Rev E（环境温度 −40~+125℃；子文档 -004 含 UIS）
+    formulas:
+      eas_with_vdd: E_AS = ½·L_loop·i_AS(0)² · V_DS,peak/(V_DS,peak − V_DD)
+      eas_vdd_disconnected: E_AS = ½·L·i_AS(0)²
+      eas_exact: E_AS = ∫ V_(AV)DSS(t)·i_AS(t) dt
+      t_avalanche: t_av = L·I/(V_AV − V_DD)
+      tj_rise: ΔTj = E_AS × Z_th(t_av) / t_av
+    margin_required: 2.0
+    vav_default_factor: 1.2
+    self_test:
+      input:
+        L: 0.0001
+        i_as0: 50
+        vds_peak: 72
+        vdd: 12
+      expect:
+        eas_no_derating: 0.125
+        eas_with_derating: 0.15
+      note: Infineon 原文算例，两者差 20%（VDD 是否在雪崩中断开）
+    verdicts:
+    - PASS
+    - FAIL
+    - NEED_DATASHEET
+    - NEED_THERMAL_MODEL
+    hard_rule: "EAS / EAR / SOA / Zth 四项任一缺失 → verdict 必须是 NEED_DATASHEET。\n线性区 /\
+      \ 缓启动 / 热插拔三类应用，即使有 SOA 也必须提示：\n  SOA 图成立前提 = 单元一致性 + die attach 焊层完整（无空洞/倾斜）+\
+      \ 热阻分布均匀，\n  三条立创字段一条都反映不了。\n"
+  reliability:
+  - key: aec_q101
+    tier: B
+    lcsc_source: name 含 AEC-Q101
+    hit: 30
+    coverage_name: 0.071
+    note: 车规用例 30/30 可判；AEC 不做认证，是供应商自声明
+  - key: aec_q101_subdocs
+    tier: C
+    note: -001 ESD HBM / -002 MM / -003 wirebond shear / -004 Miscellaneous / -005
+      CDM
+  - key: temp_grade
+    tier: B
+    note: AEC-Q101 最低环境温度范围 −40℃ ~ +125℃
+  - key: eol
+    tier: D
+    note: stock=0 ≠ 停产（13/330）；无停产标记字段，只能靠商品页/原厂 NRND 判
+  - key: solderability
+    tier: B
+    note: 封装字段可判引脚间距；EP（散热焊盘）不可判
+  - key: brand_authenticity
+    tier: B
+    note: vendors.yaml 有 144 品牌 tier；SOT-23 翻新/打磨最常见
+  known_defects:
+  - id: P0-1
+    title: 单字母子串匹配导致品类解析全错
+    repro: pick.py "找 30V 5A 的 N 沟道 MOS" → 功率电感；"找 -30V 5A 的 P 沟道 MOS" → 单片机
+    root: pick.py:236 match_family 用 `n.lower() in low` 子串匹配，'N' in 'inductor' 为真
+    fix: len(token) < 3 时禁止子串匹配，只允许精确别名
+  - id: P0-2
+    title: 负号丢失 + 极性约束缺失
+    repro: -30V 被解析成 30V；P 沟道意图返回全 N 沟道料
+    root: pick.py:335 电压正则无前导 [-−]?；count_type 从未从 `数量` 生成 P/N 约束
+    fix: 正则加 [-−]? 并映射到 polarity；从 沟道 关键词生成 count_type 子串约束
+  - id: P0-3
+    title: 单位缩放 1000× 错误
+    repro: spec.parse_ohm('48mΩ') = 48.0（应 0.048）；RDS<=10mΩ 返回 5Ω/1.1Ω/8Ω 的料
+    root: spec.py:117 单位类 ([kKMGRr]?) 漏掉 m/u/µ/n/p
+    fix: 补单位表 {p:1e-12, n:1e-9, u:1e-6, µ:1e-6, m:1e-3, '':1, k:1e3, M:1e6, G:1e9,
+      R:1, r:1}
+  - id: P0-4
+    title: 关键词数字被当精确等于 → 假阴性
+    repro: '`N沟道 30V 5A` 排除 AO3400A（5.7A）'
+    root: 立创 keyword 数字是精确等于语义
+    fix: 电压精确 + 电流客户端 >=；逐条校验 Vdss；_post 直调需 strip_html
+  - id: P0-5
+    title: totalCount 1500 硬上限
+    repro: 任何 >1500 命中都报 1500 / countPage=50；第 51 页空
+    fix: totalCount < 1500 才可信；全量枚举按 Vdss/封装切片
+  test_cases:
+  - id: T1
+    intent: 找 30V 5A 的 N 沟道 MOS，SOT-23，100 只
+    type: positive
+    expect_pass:
+    - 全部 数量 含 N沟道
+    - 全部 Vdss >= 30
+    - 全部 Id >= 5
+    - package 归一后 = SOT-23
+    - 价格单调递增
+    - RDS(on) 带 @Vgs 条件并原样展示
+    expect_guard: 禁止跨 @Vgs 条件判优劣
+    actual: C20917 AO3400A ¥0.3394 / C2938367 AO3400 ¥0.1324 / C19019 CJ3400 ¥0.1557
+    status: PASS
+  - id: T2
+    intent: 找 60V 3A 抗雪崩 N 沟道 MOS，L=100mH，VDD=48V，I=2A
+    type: negative
+    expect_pass:
+    - EAS_required ≈ 600 mJ（±1%）
+    - verdict == NEED_DATASHEET
+    - missing 含 E_AS
+    - 禁止出现 通过/可用 字样
+    expect_guard: 必须提示 VDD 是否在雪崩中断开（差 20%）；E_AS 测试 ID 条件不可比
+    status: FAIL
+  - id: T3
+    intent: 找 24V 输入、10A 浪涌、软启动 10ms 的负载开关 MOS
+    type: negative
+    expect_pass:
+    - Vdss >= 1.5 × 24 = 36V
+    - verdict == NEED_DATASHEET
+    - missing 含 SOA 与 Z_th
+    - soa_point = (24V, 10A, 10ms)
+    expect_guard: 不得用 Id 额定代替 SOA 判定
+    status: FAIL
+  - id: T4
+    intent: 找 -30V 5A 的 P 沟道 MOS
+    type: positive_regression
+    expect_pass:
+    - 品类 == 场效应管(MOSFET)
+    - 全部 数量 含 P沟道
+    - Vdss 取绝对值 >= 30
+    - Id >= 4
+    expect_guard: 负号必须映射到 polarity=P，不能读成 30V 后当 N 沟道
+    status: FAIL
+  - id: T5
+    intent: 找 RDS(on) <= 10mΩ 的 N 沟道 MOS
+    type: positive_regression
+    expect_pass:
+    - 全部 RDS(on) < 0.010 Ω（不是 < 10）
+    - 单位统一换算到 Ω
+    - 展示 @Vgs 条件
+    expect_guard: 条件缺失时标注 条件缺失，不得默认 @10V
+    status: FAIL
+  test_summary: 1 通过 / 4 不通过
+  process_lookup:
+    why: 工艺类型决定雪崩能力与线性区 SOA：平面管抗雪崩最强、线性区最好；沟槽/SGT 的 RDS·Qg 好但线性区差；超结高压低 RDS 但雪崩与线性区都差。选型时必须知道是哪一类。
+    channels:
+    - channel: datasheet_first_page
+      how: 手册首页的工艺描述（Planar / Trench / SGT / Superjunction / CoolMOS / MDmesh）
+      grade: fact
+      note: 最可靠；lcsc.py detail <C> --pdf 取手册后读第一段
+    - channel: official_product_page
+      how: 原厂官网产品页的技术分类（如 Infineon CoolMOS、ST MDmesh、onsemi SuperFET）
+      grade: fact
+      note: 官网分类即厂商自己的工艺定位
+    - channel: model_name
+      how: 型号家族名（OptiMOS/Trench/SJ/P7 等）
+      grade: inference
+      note: 只在已知家族内可靠；跨厂商不通用，必须标注推论
+    - channel: web_search
+      how: 「<型号> process planar trench」+ 分销商/论坛页面
+      grade: inference
+      note: 二手信息，只能作为查证线索，最终以手册为准
+    hard_rule: 应用 ∈ {linear, soft_start, hot_swap} 时，工艺类型必须来自 datasheet 或官网（fact 级）；仅有型号名推断时，结论措辞必须是「疑似<工艺>，需查手册确认」，不得直接给可用。

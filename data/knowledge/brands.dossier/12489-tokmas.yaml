@@ -1,0 +1,101 @@
+schema: bom-sourcing/knowledge/brand-dossier
+version: 1
+generated: '2026-11-06'
+brand:
+  lcsc_brand_id: 12489
+  name_lcsc: Tokmas(托克马斯)
+  aliases:
+  - 托克马斯
+  - TOKMAS
+  legal_entity: 广州托克马斯电子有限公司（Guangzhou Tokmas Electronics Co.,Ltd）
+  website: http://www.tokmas.com
+  country: CN
+  tier_suggested: original_fabless
+  tier_final: original_fabless
+  tier_override_reason: null
+  confidence: high
+  authorized: 傅师傅 2026-11-06 要求品牌核查（m03339）
+  tier_basis:
+  - 自有品牌 + 代工/授权代理证据
+evidence:
+- channel: qcc_ic
+  url: https://www.114ic.cn/tokmas/
+  claim: 工商全称：广州托克马斯电子有限公司（Guangzhou Tokmas Electronics Co.,Ltd）；官网 http://www.tokmas.com；自述为设计公司，晶圆流片与封装均代工（fabless）
+  grade: fact
+  confidence: high
+  note: null
+  fetched: '2026-11-06'
+- channel: trademark
+  url: https://m.chatm.com/gg/9-18357895.html
+  claim: 商标 TOKMAS（注册号 18357895）由潘文君转让给广州托克马斯电子有限公司——商标在中国实体名下，主体与品牌对应
+  grade: fact
+  confidence: high
+  note: null
+  fetched: '2026-11-06'
+- channel: authorized_dist
+  url: https://wap.seccw.com/index.php/Index/detail/id/49018.html
+  claim: 2026-08-18 圣禾堂（深圳）电子科技与 TOKMAS 签约，成为官方授权代理商；产品线为连接器与开关元器件（轻触/拨动/船型开关、DC 电源座、Type-C、FPC/FFC、针座排母、SIM
+    卡座），通过 RoHS/REACH
+  grade: fact
+  confidence: high
+  note: null
+  fetched: '2026-11-06'
+- channel: lcsc_brand_page
+  url: https://list.szlcsc.com/brand/12489.html
+  claim: 立创收录该品牌 322 条料号，横跨 12 个品类（运放/基准/隔离器/MOSFET/DC-DC/EEPROM/MCU 等）——远宽于连接器单一产品线
+  grade: fact
+  confidence: high
+  note: null
+  fetched: '2026-11-06'
+- channel: agent_site
+  url: http://www.olasshop.com/brandDetails/12489
+  claim: 宣称 1995 年成立、创始人为美籍华人阿肯色理工大学教授、年销售额超 6 亿美元；同一段文字被锐单、集好芯城等多个代理站原样复制——无第三方佐证，属代理话术
+  grade: claim
+  confidence: low
+  note: null
+  fetched: '2026-11-06'
+- channel: inference
+  url: https://www.114ic.cn/tokmas/
+  claim: 若 114ic 的『流片/封装均代工』自述成立，则 TOKMAS 是 fabless 设计公司而非 IDM；结合授权代理与宽产品线，判为 original_fabless
+  grade: inference
+  confidence: medium
+  note: null
+  fetched: '2026-11-06'
+- channel: agent_site
+  url: https://www.9icnet.com/brand-10409.html
+  claim: 锐单 / 9icnet / bom.ai / olasshop 等多家代理站原样复制同一段『1995 年成立、美籍华人阿肯色理工教授、年销售额 6
+    亿美元』介绍——多站同文说明是代理话术，而不是独立信源；也没有检索到任何第三方质量评价或翻新投诉
+  grade: claim
+  confidence: low
+  note: null
+  fetched: '2026-11-06'
+- channel: distributor_page
+  url: https://item.szlcsc.com/57968569.html
+  claim: 立创在售 TOKMAS 型号多为业界通用料号贴自家品牌（CP2102-GMR、MC1496DR2G、CXL7015E、TJA1040T）——属兼容/替代料号体系，需确认是否为原厂授权生产
+  grade: fact
+  confidence: medium
+  note: null
+  fetched: '2026-11-06'
+gaps:
+- 未查到国家企业信用信息公示系统（gsxt）原始登记页：注册资本、成立日期、参保人数、经营异常记录均未取证
+- 未查到任何第三方质量评价或翻新/假货投诉（社区检索无结果，不等于没有，只说明公开信息少）
+- 未独立核实 tokmas.com 是否为品牌自有域名（代理站给的官网链接未逐一验证内容）
+- 未确认「1995 年成立 / 年销售额 6 亿美元」是否有独立信源——目前只有多家代理站同文
+- 未确认通用料号（CP2102、MC1496、TJA1040 等）是原厂授权生产还是贴牌分销
+conclusion: '**结论：可用，但按 fabless 兼容料号品牌对待（tier=original_fabless，把握 medium）。**
+
+
+  已检索到的硬事实：①工商主体为「广州托克马斯电子有限公司」，官网 tokmas.com；②商标 TOKMAS（注册号 18357895）归属该主体；③2026-08-18
+  与圣禾堂（深圳）电子科技签署官方授权代理；④立创收录 322 条料号、横跨 12 个品类，型号多为业界通用料号贴自家品牌。
+
+
+  需要警惕的两点：
+
+
+  1. 品牌故事（1995 年成立、美籍华人阿肯色理工大学教授、年销售额 6 亿美元）在锐单 / 9icnet / bom.ai / olasshop 等多家代理站**原样复制**，没有任何独立信源，按「代理话术」处理，不采信。
+
+  2. 产品线同时覆盖功率器件（SiC / IGBT）与模拟信号链（运放 / 隔离器 / ADC），与 114ic 自述的「晶圆流片与封装均代工」一致，但也意味着**同一品牌下不同品类的实际生产方可能不同**——关键料号建议只按「料号
+  + 规格 + 批次一致性」验收，不按品牌整体信任。
+
+
+  落到采购动作：打样阶段可用；量产或车规 / 工业级场合，需先取原厂规格书与 RoHS / REACH 证书，并对关键参数（尤其功率器件的雪崩 / SOA）做来料验证。'
