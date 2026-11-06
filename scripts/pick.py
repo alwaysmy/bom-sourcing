@@ -526,6 +526,73 @@ def dedupe_by_model(recs):
     return list(best.values())
 
 
+# --------------------------------------------------------------------- 封装（展示与回退）
+# 片式封装的标称尺寸（mm）：立创只给 "0805" 这种代号，看不出体积，配单时面积差一倍很常见。
+_CHIP_SIZE = {
+    "01005": (0.4, 0.2), "0201": (0.6, 0.3), "0402": (1.0, 0.5), "0603": (1.6, 0.8),
+    "0805": (2.0, 1.25), "1206": (3.2, 1.6), "1210": (3.2, 2.5), "1812": (4.5, 3.2),
+    "2010": (5.0, 2.5), "2512": (6.4, 3.2),
+}
+_PKG_DIM_RE = re.compile(r"[(（]\s*(\d+(?:\.\d+)?)\s*[xX×*]\s*(\d+(?:\.\d+)?)\s*[)）]")
+# 只有"引脚数型"封装名后面的数字才是引脚数。SOT-23 / SOD-123 / DO-214AC / TO-252 里的数字
+# 是封装代号，不是引脚数（SOT-23 是 3 脚，写成 23 会误导）。
+_PIN_PKG_RE = re.compile(
+    r"(?:LQFP|TQFP|QFP|QFN|DFN|SOP|SOIC|TSSOP|MSOP|SSOP|WLCSP|DIP|BGA|LGA)[- ]?(\d{1,3})", re.I)
+
+
+def pkg_meta(text):
+    """把封装字符串拆成可展示、可比较的元数据。
+
+    `LQFP-48(7x7)` → pins=48, 7.0×7.0mm, area=49.0
+    `0805`         → 片式封装按标称尺寸 2.0×1.25mm, area=2.5
+    `SOP-8-208mil` → pins=8, 尺寸未知（只有引脚数与宽度代号）
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return {"name": "", "pins": None, "w": None, "h": None, "area": None, "label": ""}
+    key = pkg_key(raw)
+    w = h = None
+    m = _PKG_DIM_RE.search(raw)
+    if m:
+        w, h = float(m.group(1)), float(m.group(2))
+    elif key in _CHIP_SIZE:
+        w, h = _CHIP_SIZE[key]
+    pins = None
+    pm = _PIN_PKG_RE.search(raw)
+    if pm:
+        try:
+            pins = int(pm.group(1))
+        except ValueError:
+            pins = None
+    area = round(w * h, 2) if (w and h) else None
+    label = raw
+    if area:
+        label = f"{raw} {area:g}mm²"
+    return {"name": raw, "pins": pins, "w": w, "h": h, "area": area, "label": label}
+
+
+def pkg_relation(need_text, got_text):
+    """候选封装 vs 需求封装 → (level, note)。
+
+    level: same（同封装）/ smaller（更小）/ larger（更大）/ close（面积接近）/ different（无法比较）
+    note : 给人看的差异说明，例如 "面积 0.48×（更小，焊接/散热需复核）"
+    """
+    nk, gk = pkg_key(need_text), pkg_key(got_text)
+    if nk and nk == gk:
+        return "same", ""
+    a, b = pkg_meta(need_text), pkg_meta(got_text)
+    if a["area"] and b["area"]:
+        ratio = b["area"] / a["area"]
+        if 0.9 <= ratio <= 1.1:
+            return "close", f"面积 {ratio:.2f}×（接近）"
+        if ratio < 0.9:
+            return "smaller", f"面积 {ratio:.2f}×（更小，散热/爬电距离需复核）"
+        return "larger", f"面积 {ratio:.2f}×（更大，看板上空间）"
+    if a["pins"] and b["pins"] and a["pins"] != b["pins"]:
+        return "different", f"引脚 {a['pins']}→{b['pins']}"
+    return "different", f"需求 {need_text}，实为 {got_text or '未知'}"
+
+
 # --------------------------------------------------------------------- 输出
 def function_gate(rec, info, family=None):
     """功能符合性闸门：参数满足 ≠ 功能对。
@@ -561,28 +628,131 @@ def param_brief(rec, info, limit=4):
     return "；".join(out)
 
 
-def render(cat, qty, picked, total_scanned, fails_stat, unknowns, args):
+def verify_candidates(cli, picked, n, qty, info=None, family=None):
+    """主动核对：把选出来的前 N 条**回到立创实时复核**一遍（不吃缓存）。
+
+    核对项与判据：
+      库存复核   重新取一次库存，与扫描时比对；为 0 直接判「不可下单」
+      价格复核   按数量重算阶梯价，变了就报出来（价格是快照，交付必须带时间）
+      生命周期   商品名/在售状态（"停售"字样、in_stock）
+      手册可得   datasheet_pdf 能不能取到签名直链（取不到 = 无法核对规格）
+      功能符合   function_check 结论 + 商品名原文（参数满足 ≠ 功能对）
+      结论       可下单 / 需人工确认 / 不可用（附原因）
+    """
+    n = min(n, len(picked or []))
+    if n <= 0:
+        return []
+    print(f"\n## 主动核对（前 {n} 条，回立创实时复核；价格/库存为 {datetime.now():%Y-%m-%d %H:%M} 快照）")
+    header = ["C号", "型号", "库存复核", "价格复核", "生命周期", "手册", "功能", "结论"]
+    rows, records = [], []
+    for r in picked[:n]:
+        code = (r.get("code") or "").strip()
+        try:
+            fresh = cli.raw_search(code, cache=False)
+            rec = next((x for x in (fresh.get("records") or [])
+                        if (x.get("code") or "").upper() == code.upper()), None)
+        except Exception as e:  # noqa: BLE001
+            rows.append([code, (r.get("model") or "")[:20], "复核失败", "-", "-", "-", "-", f"不可用（{e}）"])
+            continue
+        if rec is None:
+            rows.append([code, (r.get("model") or "")[:20], "已下架", "-", "-", "-", "-", "不可用（检索不到）"])
+            continue
+        # 1) 库存
+        s0, s1 = r.get("stock") or 0, rec.get("stock") or 0
+        stock_txt = f"{s1:,}" + ("" if s0 == s1 else f"（{s1 - s0:+,}）")
+        # 2) 价格
+        p0, p1 = price_at(r, qty), price_at(rec, qty)
+        price_txt = "?" if p1 is None else money(p1) + ("" if p0 == p1 else "（变动）")
+        # 3) 生命周期
+        nm = f"{rec.get('name') or ''}{rec.get('type') or ''}"
+        if "停售" in nm or "停产" in nm:
+            life = "停售/停产"
+        elif s1 <= 0:
+            life = "无货"
+        else:
+            life = "在售"
+        # 4) 手册
+        try:
+            pdf = cli.datasheet_pdf(code)
+        except Exception:  # noqa: BLE001
+            pdf = None
+        sheet = "有" if pdf else "无（需原厂核对）"
+        # 5) 功能
+        verdict, _p, _ngs, why = function_gate(rec, info or {}, family)
+        func = {"ok": "ok", "mismatch": "不符", "conflict": "歧义", "unknown": "未确认"}.get(verdict, verdict)
+        # 6) 结论
+        if life != "在售":
+            concl = "不可用（" + life + "）"
+        elif s1 < qty:
+            concl = f"需人工（库存 {s1:,} < 需求 {qty}）"
+        elif verdict == "mismatch":
+            concl = f"不可用（功能不符：{why}）"
+        elif verdict in ("conflict", "unknown") or not pdf:
+            concl = "需人工确认" + ("（功能歧义）" if verdict == "conflict" else
+                                    "（功能未确认）" if verdict == "unknown" else "（无手册）")
+        else:
+            concl = "可下单"
+        rows.append([code, (rec.get("model") or "")[:20], stock_txt, price_txt, life, sheet, func, concl])
+        records.append({"code": code, "model": rec.get("model"), "stock": s1, "price": p1,
+                        "lifecycle": life, "datasheet": pdf, "function": verdict, "conclusion": concl})
+    w = [max(cwidth(h), *(cwidth(row[i]) for row in rows)) for i, h in enumerate(header)]
+    print("  " + "  ".join(pad(h, w[i]) for i, h in enumerate(header)))
+    for row in rows:
+        print("  " + "  ".join(pad(v, w[i]) for i, v in enumerate(row)))
+    print("  核对口径：库存/价格回立创实时接口重取；手册走商品页签名直链；功能按商品名正/反向词判定。"
+          "\n  仍需人工的一步：手册里的绝对最大额定值、封装焊盘图、EOL/PCN 公告 —— 这些接口没有。")
+    return records
+
+
+def render(cat, qty, picked, total_scanned, fails_stat, unknowns, args,
+           pkg_fallback=None, pkg_need=None, pkg_dist=None):
     label = cat.get("label_cn") or cat.get("keyword")
     print(f"\n品类: {label}（catalogIdFilter={cat.get('catalog_id') or '未解析'}，关键词={cat.get('keyword')}）")
     print(f"扫描 {total_scanned} 条候选，按 {args.sort} 排序；数量 {qty}；命中 {len(picked)} 条")
     shown = [c.raw for c in (getattr(args, "_constraints", None) or [])]
+    if pkg_need:
+        shown.append(f"封装={pkg_need}")
     if shown:
         print("约束: " + "，".join(shown))
+    if pkg_dist:
+        # 没提封装要求时，封装就是选型的第一变量，直接摊开
+        print("封装分布: " + "  ".join(pkg_dist) + "（未指定封装，全部列出，按面积/体积自行取舍）")
     if not picked:
         print("\n没有满足全部约束的料。建议放宽：" + ("，".join(fails_stat[:3]) if fails_stat else "换品类或去掉约束"))
-        return
-    header = ["#", "C号", "型号", "品牌", "封装", "关键参数", f"单价@{qty}", "库存", "销量"]
-    rows = []
-    for i, r in enumerate(picked, 1):
-        price = price_at(r, qty)
-        brief = param_brief(r, cat.get("info"), limit=5)
-        rows.append([str(i), r.get("code") or "", (r.get("model") or "")[:28], (r.get("brand") or "")[:16],
-                     r.get("package") or "", brief[:80] + ("…" if len(brief) > 80 else ""),
-                     money(price) if price is not None else "?", f"{r.get('stock') or 0:,}", str(r.get("sales") or 0)])
-    widths = [max(cwidth(h), *(cwidth(row[i]) for row in rows)) for i, h in enumerate(header)]
-    print("  " + "  ".join(pad(h, widths[i]) for i, h in enumerate(header)))
-    for row in rows:
-        print("  " + "  ".join(pad(v, widths[i]) for i, v in enumerate(row)))
+        if not pkg_fallback:
+            return
+        print("下面这些料**其余约束都满足、只是封装不对**，供取舍：")
+    if picked:
+        header = ["#", "C号", "型号", "品牌", "封装（含面积）", "关键参数", f"单价@{qty}", "库存", "销量"]
+        rows = []
+        for i, r in enumerate(picked, 1):
+            price = price_at(r, qty)
+            brief = param_brief(r, cat.get("info"), limit=5)
+            rows.append([str(i), r.get("code") or "", (r.get("model") or "")[:28], (r.get("brand") or "")[:16],
+                         pkg_meta(r.get("package"))["label"],
+                         brief[:80] + ("…" if len(brief) > 80 else ""),
+                         money(price) if price is not None else "?", f"{r.get('stock') or 0:,}",
+                         str(r.get("sales") or 0)])
+        widths = [max(cwidth(h), *(cwidth(row[i]) for row in rows)) for i, h in enumerate(header)]
+        print("  " + "  ".join(pad(h, widths[i]) for i, h in enumerate(header)))
+        for row in rows:
+            print("  " + "  ".join(pad(v, widths[i]) for i, v in enumerate(row)))
+    if pkg_fallback:
+        print(f"\n## 封装回退候选（需求 {pkg_need}；其余约束全部满足，仅封装不同）")
+        fb_header = ["C号", "型号", "品牌", "实际封装", "差异", f"单价@{qty}", "库存"]
+        fb_rows = []
+        for r in pkg_fallback:
+            level, note = pkg_relation(pkg_need, r.get("package"))
+            price = price_at(r, qty)
+            fb_rows.append([r.get("code") or "", (r.get("model") or "")[:24], (r.get("brand") or "")[:14],
+                            pkg_meta(r.get("package"))["label"], note or "同封装",
+                            money(price) if price is not None else "?", f"{r.get('stock') or 0:,}"])
+        fw = [max(cwidth(h), *(cwidth(row[i]) for row in fb_rows)) for i, h in enumerate(fb_header)]
+        print("  " + "  ".join(pad(h, fw[i]) for i, h in enumerate(fb_header)))
+        for row in fb_rows:
+            print("  " + "  ".join(pad(v, fw[i]) for i, v in enumerate(row)))
+        print("  取舍要点：封装更小 → 焊盘/散热/爬电距离要复核；封装更大 → 看板上空间与钢网；"
+              "引脚数不同 → 必须改 PCB。封装不符的料不能直接替代，需人工确认。")
     if unknowns:
         tail = "" if args.allow_unknown else "（这些候选按「缺参数视为不满足」排除）"
         print(f"\n注意: {len(unknowns)} 个约束在部分候选上找不到对应参数字段：{'、'.join(sorted(set(unknowns))[:5])}{tail}")
@@ -886,9 +1056,13 @@ def cmd_pick(args):
         else:
             constraints.append(c)
     constraints.extend(parse_intent(text, cat.get("family")))
-    if args.package:
-        constraints.append(Constraint("_pkg", "=", args.package, args.package, ""))
-    args._constraints = [c for c in constraints if c.quant != "_pkg"]
+    # 封装要求单独一组：它的失败**不直接淘汰**，而是进「回退候选」（见下）。
+    # 封装可能来自 --package，也可能来自句子里（"10uF 25V 0805 电容"），两处合并。
+    pkg_from_text = [c.value for c in constraints if c.quant == "_pkg"]
+    pkg_need = (args.package or "").strip() or (pkg_from_text[0] if pkg_from_text else None)
+    pkg_cs = [Constraint("_pkg", "=", pkg_need, pkg_need, "")] if pkg_need else []
+    cs = [c for c in constraints if c.quant != "_pkg"]  # 名称/参数约束（不含封装）
+    args._constraints = cs
 
     pages = max(1, args.pages)
     recs, total, page = [], None, 1
@@ -913,9 +1087,10 @@ def cmd_pick(args):
 
     ok, fails_all, unknown_dropped = [], [], []
     func_mismatch, func_unconfirmed, func_conflict = [], [], []
+    pkg_fallback = []  # 封装不符、但其余约束全满足的候选（用户要求"依然列出来并说明"）
     info = cat.get("info") or {}
     for r in recs:
-        good, fails, unknowns = evaluate(r, constraints)
+        good, fails, unknowns = evaluate(r, cs)
         if not good:
             fails_all.extend(fails)
             continue
@@ -933,13 +1108,37 @@ def cmd_pick(args):
         if unknowns and not args.allow_unknown:
             # 关键约束在该料上根本没这个参数 → 不能当作"满足"（例如只标了 300mA 的料没写耐压）
             unknown_dropped.append(r)
-        else:
+            continue
+        pkg_ok = True
+        if pkg_cs:
+            pkg_ok, pkg_fails, _ = evaluate(r, pkg_cs)
+        if pkg_ok:
             ok.append(r)
+        else:
+            fails_all.extend(pkg_fails)
+            pkg_fallback.append(r)
     from collections import Counter
     fails_stat = [f"{k} ×{v}" for k, v in Counter(fails_all).most_common(3)]
     picked = rank(ok, args.qty, args.sort)[: args.limit]
-    all_unknowns = [u for r in recs for u in evaluate(r, constraints)[2]]
-    render(cat, args.qty, picked, scanned, fails_stat, all_unknowns, args)
+    # 回退候选：只有「封装要求一条都没满足」时才兜底（满足了就不列，避免噪音）
+    # 按「离需求封装多近」排，再按价格
+    n_pkg_fb = 0 if getattr(args, "no_pkg_fallback", False) else max(0, getattr(args, "pkg_fallback", 3))
+    if pkg_need and n_pkg_fb and not picked:
+        rel_rank = {"close": 0, "smaller": 1, "larger": 2, "different": 3}
+        pkg_fallback = sorted(
+            pkg_fallback,
+            key=lambda r: (rel_rank.get(pkg_relation(pkg_need, r.get("package"))[0], 9),
+                           price_at(r, args.qty) or 9e9))[:n_pkg_fb]
+    else:
+        pkg_fallback = []
+    # 封装分布：没提封装要求时，把"都有哪些封装"直接摊开给用户挑
+    pkg_dist = []
+    if not pkg_need and ok:
+        cnt = Counter((pkg_meta(r.get("package"))["label"] or r.get("package") or "未知") for r in ok)
+        pkg_dist = [f"{k}×{v}" for k, v in cnt.most_common(6)]
+    all_unknowns = [u for r in recs for u in evaluate(r, cs)[2]]
+    render(cat, args.qty, picked, scanned, fails_stat, all_unknowns, args,
+           pkg_fallback=pkg_fallback, pkg_need=pkg_need, pkg_dist=pkg_dist)
     if func_mismatch:
         print(f"功能不符已剔除 {len(func_mismatch)} 条："
               + "；".join(func_mismatch[:3]) + ("…" if len(func_mismatch) > 3 else ""))
@@ -951,6 +1150,9 @@ def cmd_pick(args):
               "选型前需查手册或原厂页面 —— `python lcsc.py detail <C号> --pdf` 下载后交 read-pdf。")
     if unknown_dropped:
         print(f"另有 {len(unknown_dropped)} 条因缺少约束对应参数被排除（加 --allow-unknown 可放行）")
+    verified = []
+    if picked and getattr(args, "verify", 0):
+        verified = verify_candidates(cli, picked, args.verify, args.qty, info, cat.get("family"))
     n_cmp = taobao_plan(args)
     if picked and n_cmp:
         market_compare(picked, args, n_cmp)
@@ -962,7 +1164,16 @@ def cmd_pick(args):
             "generated": datetime.now().isoformat(timespec="seconds"),
             "category": cat, "qty": args.qty, "scanned": scanned,
             "constraints": [c.raw for c in constraints],
-            "picked": [dict(r, unit_price=price_at(r, args.qty)) for r in picked],
+            "package_need": pkg_need,
+            "package_distribution": pkg_dist,
+            "picked": [dict(r, unit_price=price_at(r, args.qty),
+                            package_meta=pkg_meta(r.get("package"))) for r in picked],
+            "package_fallback": [dict(r, unit_price=price_at(r, args.qty),
+                                      package_meta=pkg_meta(r.get("package")),
+                                      package_relation=pkg_relation(pkg_need, r.get("package"))[0],
+                                      package_note=pkg_relation(pkg_need, r.get("package"))[1])
+                                 for r in pkg_fallback],
+            "verified": verified,
         }
         Path(args.json).write_text(json.dumps(out, ensure_ascii=False, indent=1), encoding="utf-8")
         print(f"\nJSON 已写入 {args.json}")
@@ -1015,7 +1226,13 @@ def main(argv=None):
     p.add_argument("--family", help="family 名或中文名（ldo / 线性稳压器 / mosfet）")
     p.add_argument("--cat", help="直接指定立成品类名（走 catalogGroup 解析）")
     p.add_argument("--param", dest="params", action="append", help="约束，如 输出电压=3.3V / 输出电流>=1A")
-    p.add_argument("--package", help="封装，如 SOT-23 / 0805")
+    p.add_argument("--package", help="封装，如 SOT-23 / 0805（不满足的会进「封装回退」段，不直接丢弃）")
+    p.add_argument("--pkg-fallback", dest="pkg_fallback", type=int, default=3, metavar="N",
+                   help="封装回退候选条数（默认 3；0 关闭）：封装不符但其余约束全满足的料仍列出并说明差异")
+    p.add_argument("--no-pkg-fallback", dest="no_pkg_fallback", action="store_true",
+                   help="完全按封装硬筛，不给回退候选")
+    p.add_argument("--verify", type=int, nargs="?", const=3, default=0, metavar="N",
+                   help="主动核对前 N 条（默认 3）：回立创实时复核库存/价格/生命周期/手册，并给下单结论")
     p.add_argument("--brand-id", help="立创品牌 id（见 search --brand）")
     p.add_argument("--price-min", default="")
     p.add_argument("--price-max", default="")
