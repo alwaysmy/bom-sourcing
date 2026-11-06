@@ -12,11 +12,5 @@ brands:
   reason: 批次一致性差，用户指定拉黑
   added: '2026-11-06'
   source: 用户指令 2026-11-06
-shops:
-- name: 深圳市优信电子科技有限公司
-  aliases:
-  - 优信电子
-  reason: 只卖拆机件，用户指定拉黑
-  added: '2026-11-06'
-  source: 演示
+shops: []
 codes: []
