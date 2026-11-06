@@ -15,9 +15,15 @@
 
 用法：
   python scripts/blacklist.py list
-  python scripts/blacklist.py add "Tokmas(托克马斯)" --kind brand --reason "批次一致性差，用户指定" --alias tokmas
   python scripts/blacklist.py check "Tokmas(托克马斯)"
-  python scripts/blacklist.py remove "Tokmas(托克马斯)" --kind brand
+  python scripts/blacklist.py import entries.yaml --kind shop --authorized "傅师傅 2026-11-06"
+  python scripts/blacklist.py add "Tokmas(托克马斯)" --kind brand --reason "批次一致性差" --authorized "傅师傅 2026-11-06"
+  python scripts/blacklist.py remove "Tokmas(托克马斯)" --kind brand --authorized "傅师傅 2026-11-06"
+
+写入门禁：
+  黑名单是**采购策略事实**，不是演示数据。所有写操作（add / remove / import）都必须带
+  `--authorized "<谁 / 什么时候 / 为什么>"`，缺了直接拒绝；授权说明写进条目的 `authorized` 字段。
+  **不要手工编辑 YAML** —— 走 `import`（校验 schema、去重、补审计字段）。单测/演示只用虚构名字。
 
 文件：data/knowledge/blacklist.yaml（可用环境变量 BOM_BLACKLIST 指向别的文件）
 """
@@ -92,7 +98,8 @@ def save(data: dict, path=None) -> Path:
     data["updated"] = date.today().isoformat()
     header = (
         "# 黑名单 / 白名单（人工维护，可追溯）\n"
-        "# 维护：python scripts/blacklist.py add|remove|list|check\n"
+        "# 维护：python scripts/blacklist.py import|add|remove|list|check（写操作需 --authorized）\n"
+        "# 不要手工编辑本文件：走 import 接口，它会补 added/source/authorized 审计字段\n"
         "# 口径：小写、去空白、去括号后按「别名子串」匹配；只挡对应维度，不静默替换型号\n"
     )
     body = yaml.safe_dump(data, allow_unicode=True, sort_keys=False, width=110)
@@ -151,11 +158,27 @@ def filter_records(records, data=None, kind="brand"):
 
 
 # --------------------------------------------------------------------------- 维护
-def add(name, kind="brand", reason="", source="", aliases=None, path=None) -> dict:
+_AUTH_HINT = (
+    "写操作需要用户授权：加 --authorized \"<谁 / 什么时候 / 为什么>\"，"
+    "例如 --authorized \"傅师傅 2026-11-06 指定 Tokmas 拉黑\"。\n"
+    "黑名单是采购策略事实，未经授权的条目不允许写入（也不要手工编辑 YAML）。"
+)
+
+
+def _require_auth(authorized) -> str:
+    """写入门禁：没有授权说明就拒绝。"""
+    text = (authorized or "").strip()
+    if not text:
+        raise PermissionError(_AUTH_HINT)
+    return text
+
+
+def add(name, kind="brand", reason="", source="", aliases=None, path=None, authorized="") -> dict:
     if kind not in KINDS:
         raise ValueError(f"kind 必须是 {KINDS}")
     if not (name or "").strip():
         raise ValueError("name 不能为空")
+    auth = _require_auth(authorized)
     data = load(path)
     key = _KIND_KEY[kind]
     for e in data[key]:
@@ -166,16 +189,19 @@ def add(name, kind="brand", reason="", source="", aliases=None, path=None) -> di
                     e["aliases"].append(a)
             if reason:
                 e["reason"] = reason
+            e["authorized"] = auth
             save(data, path)
             return e
     entry = {"name": name.strip(), "aliases": list(aliases or []),
-             "reason": reason, "added": date.today().isoformat(), "source": source}
+             "reason": reason, "added": date.today().isoformat(),
+             "source": source, "authorized": auth}
     data[key].append(entry)
     save(data, path)
     return entry
 
 
-def remove(name, kind="brand", path=None) -> bool:
+def remove(name, kind="brand", path=None, authorized="") -> bool:
+    _require_auth(authorized)
     data = load(path)
     key = _KIND_KEY[kind]
     before = len(data[key])
@@ -184,6 +210,87 @@ def remove(name, kind="brand", path=None) -> bool:
     if ok:
         save(data, path)
     return ok
+
+
+def _rows_from_file(file, kind="brand"):
+    """把导入文件读成 [(kind, {name, aliases, reason}), ...]。
+
+    支持三种形态：
+      1. 完整名单文档（brands / shops / codes 三组）—— 忽略 kind 参数；
+      2. 条目列表 `[{name: ..., aliases: [...], reason: ...}, ...]` 或纯字符串列表；
+      3. 每行一个名字的文本（.txt / .csv）。
+    """
+    p = Path(file)
+    if not p.exists():
+        raise FileNotFoundError(f"导入文件不存在：{p}")
+    suffix = p.suffix.lower()
+    text = p.read_text(encoding="utf-8")
+    if suffix in (".yaml", ".yml", ".json"):
+        raw = (yaml.safe_load(text) if suffix != ".json" else json.loads(text)) or {}
+        if isinstance(raw, dict) and any(k in raw for k in ("brands", "shops", "codes")):
+            rows = []
+            for k, key in _KIND_KEY.items():
+                for e in raw.get(key) or []:
+                    rows.append((k, e if isinstance(e, dict) else {"name": str(e)}))
+            return rows
+        items = raw if isinstance(raw, list) else [raw]
+        return [(kind, e if isinstance(e, dict) else {"name": str(e)}) for e in items if e]
+    # 纯文本：每行一个名字，允许行内 `#` 注释
+    rows = []
+    for line in text.splitlines():
+        name = line.split("#", 1)[0].strip().lstrip("-").strip()
+        if name:
+            rows.append((kind, {"name": name}))
+    return rows
+
+
+def import_entries(rows, source="", authorized="", path=None, dry_run=False) -> dict:
+    """批量导入（唯一推荐入口）：校验 + 去重 + 补审计字段。
+
+    返回 {"added": [...], "updated": [...], "skipped": [...], "dry_run": bool}。
+    """
+    auth = _require_auth(authorized)
+    data = load(path)
+    added, updated, skipped = [], [], []
+    for kind, raw in rows:
+        if kind not in KINDS:
+            skipped.append({"name": str(raw), "why": f"kind 非法：{kind}"})
+            continue
+        name = (raw.get("name") or "").strip() if isinstance(raw, dict) else str(raw).strip()
+        if not name:
+            skipped.append({"name": "", "why": "name 为空"})
+            continue
+        aliases = [a for a in (raw.get("aliases") or []) if str(a).strip()] if isinstance(raw, dict) else []
+        reason = (raw.get("reason") or "") if isinstance(raw, dict) else ""
+        key = _KIND_KEY[kind]
+        hit = next((e for e in data[key] if norm(e.get("name")) == norm(name)), None)
+        if hit is None:
+            data[key].append({"name": name, "aliases": aliases, "reason": reason,
+                              "added": date.today().isoformat(),
+                              "source": source, "authorized": auth})
+            added.append(f"{KIND_CN[kind]}:{name}")
+            continue
+        changed = False
+        hit.setdefault("aliases", [])
+        for a in aliases:
+            if norm(a) not in [norm(x) for x in hit["aliases"]]:
+                hit["aliases"].append(a)
+                changed = True
+        if reason and hit.get("reason") != reason:
+            hit["reason"] = reason
+            changed = True
+        if hit.get("authorized") != auth:
+            hit["authorized"] = auth
+            changed = True
+        (updated if changed else skipped).append(f"{KIND_CN[kind]}:{name}")
+    if not dry_run and (added or updated):
+        save(data, path)
+    return {"added": added, "updated": updated, "skipped": skipped, "dry_run": dry_run}
+
+
+def import_file(file, kind="brand", source="", authorized="", path=None, dry_run=False) -> dict:
+    return import_entries(_rows_from_file(file, kind), source=source,
+                          authorized=authorized, path=path, dry_run=dry_run)
 
 
 # --------------------------------------------------------------------------- 渲染
@@ -204,7 +311,8 @@ def render(data: dict) -> None:
             print(f"      别名: {alias}")
             print(f"      原因: {e.get('reason') or '—'}")
             print(f"      加入: {e.get('added') or '—'}  来源: {e.get('source') or '—'}")
-    print(f"\n合计 {total} 条。文件是唯一事实来源，可直接编辑（YAML）。")
+            print(f"      授权: {e.get('authorized') or '（未记录，历史条目）'}")
+    print(f"\n合计 {total} 条。维护走 `blacklist.py import|add|remove --authorized \"<授权说明>\"`，不要手工编辑 YAML。")
 
 
 # --------------------------------------------------------------------------- CLI
@@ -219,16 +327,26 @@ def main(argv=None):
     p = sub.add_parser("list", help="列出全部黑名单")
     p.add_argument("--json", help="输出 JSON 到文件")
 
-    p = sub.add_parser("add", help="加入黑名单")
+    p = sub.add_parser("add", help="加入黑名单（需 --authorized）")
     p.add_argument("name")
     p.add_argument("--kind", choices=KINDS, default="brand")
     p.add_argument("--reason", default="")
     p.add_argument("--source", default="")
     p.add_argument("--alias", action="append", default=[], help="可多个")
+    p.add_argument("--authorized", default="", help="谁/什么时候/为什么授权（必填）")
 
-    p = sub.add_parser("remove", help="从黑名单移除")
+    p = sub.add_parser("import", help="批量导入黑名单（推荐入口，需 --authorized）")
+    p.add_argument("file", help="YAML/JSON/TXT；YAML 可含 brands/shops/codes 三组")
+    p.add_argument("--kind", choices=KINDS, default="brand", help="文件里没有分组时按这个维度导入")
+    p.add_argument("--source", default="", help="来源，如 用户指令 2026-11-06")
+    p.add_argument("--authorized", default="", help="谁/什么时候/为什么授权（必填）")
+    p.add_argument("--dry-run", action="store_true", help="只报告，不落盘")
+    p.add_argument("--json", action="store_true", help="输出 JSON 汇总")
+
+    p = sub.add_parser("remove", help="从黑名单移除（需 --authorized）")
     p.add_argument("name")
     p.add_argument("--kind", choices=KINDS, default="brand")
+    p.add_argument("--authorized", default="", help="谁/什么时候/为什么授权（必填）")
 
     p = sub.add_parser("check", help="查一段文字是否命中黑名单")
     p.add_argument("text")
@@ -247,12 +365,40 @@ def main(argv=None):
         return 0
 
     if a.cmd == "add":
-        e = add(a.name, a.kind, a.reason, a.source, a.alias)
+        try:
+            e = add(a.name, a.kind, a.reason, a.source, a.alias, authorized=a.authorized)
+        except PermissionError as e:
+            print(str(e), file=sys.stderr)
+            return 2
         print(f"已加入{KIND_CN[a.kind]}黑名单：{e.get('name')}（别名 {e.get('aliases') or '—'}）")
         return 0
 
+    if a.cmd == "import":
+        try:
+            res = import_file(a.file, a.kind, a.source, a.authorized, dry_run=a.dry_run)
+        except PermissionError as e:
+            print(str(e), file=sys.stderr)
+            return 2
+        except (FileNotFoundError, ValueError) as e:
+            print(f"[失败] {e}", file=sys.stderr)
+            return 1
+        if a.json:
+            print(json.dumps(res, ensure_ascii=False, indent=1))
+            return 0
+        tag = "（dry-run，未落盘）" if res["dry_run"] else ""
+        print(f"导入完成{tag}：新增 {len(res['added'])}、更新 {len(res['updated'])}、跳过 {len(res['skipped'])}")
+        for k, rows in (("新增", res["added"]), ("更新", res["updated"]), ("跳过", res["skipped"])):
+            for r in rows:
+                print(f"  {k}: {r}")
+        return 0
+
     if a.cmd == "remove":
-        if remove(a.name, a.kind):
+        try:
+            ok = remove(a.name, a.kind, authorized=a.authorized)
+        except PermissionError as e:
+            print(str(e), file=sys.stderr)
+            return 2
+        if ok:
             print(f"已移除：{a.name}")
             return 0
         print(f"没找到：{a.name}", file=sys.stderr)

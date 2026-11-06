@@ -18,7 +18,7 @@
 | 海外站比价 | `python scripts/distributor.py search "TPS25947" --site both --limit 5` |
 | 原厂价/库存 | `python scripts/origin.py search TPA7836B --vendor 3peak` |
 | 取数据手册 | `python scripts/lcsc.py detail C8734 --pdf --download ./pdfs` |
-| 管黑名单 | `python scripts/blacklist.py list` / `check "Tokmas"` / `add "某店铺" --kind shop --reason "…"` |
+| 管黑名单 | `python scripts/blacklist.py list` / `check "Tokmas"` / `import entries.yaml --kind shop --authorized "…"` |
 
 ## 能力
 
@@ -52,7 +52,7 @@ scripts/bom.py        BOM 报价单
 scripts/spec.py       参数解析与指标比对
 scripts/taobao.py     淘宝/1688 检索（WebBridge 登录态）
 scripts/distributor.py  Mouser 中国 / DigiKey 中国检索（WebBridge 登录态）
-scripts/blacklist.py     品牌 / 店铺 / 料号黑名单（pick、bom、taobao 默认生效）
+scripts/blacklist.py     品牌 / 店铺 / 料号黑名单（pick、bom、taobao 默认生效；写操作需 --authorized）
 data/categories.yaml  25 family 的品类 id、参数键与关键约束
 data/spec-rules.yaml  32 family 的 critical/relaxable 参数、降额基准、风险备注
 references/           API 事实、指标判据、找料实现、渠道配方、调研证据链

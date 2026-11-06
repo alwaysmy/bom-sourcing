@@ -153,11 +153,20 @@ Excel 导出时选「CSV UTF-8」，中文列名能自动识别（型号/Comment
 这些不该每次靠人记。名单落在 `data/knowledge/blacklist.yaml`，三组：`brands` / `shops` / `codes`。
 
 ```bash
-python scripts/blacklist.py list                       # 看名单（品牌/店铺/料号）
-python scripts/blacklist.py check "Tokmas(托克马斯)"     # 查一个名字（子串别名，大小写无关）
-python scripts/blacklist.py add "深圳市优信电子科技有限公司" --kind shop --reason "只卖拆机件" --alias "优信电子"
-python scripts/blacklist.py remove "Tokmas(托克马斯)" --kind brand
+python scripts/blacklist.py list                              # 看名单（品牌/店铺/料号）
+python scripts/blacklist.py check "Tokmas(托克马斯)"            # 查一个名字（子串别名，大小写无关）
+python scripts/blacklist.py import entries.yaml --kind shop --authorized "傅师傅 2026-11-06"
+python scripts/blacklist.py remove "Tokmas(托克马斯)" --kind brand --authorized "傅师傅 2026-11-06"
 ```
+
+> **写入门禁（硬规则）**
+> 黑名单是**采购策略事实**，不是演示数据。只有**用户明确授权**的条目才能进名单：
+> 所有写操作（`import` / `add` / `remove`）必须带 `--authorized "<谁 / 什么时候 / 为什么>"`，
+> 缺这个参数直接拒绝执行；授权说明会写进条目的 `authorized` 字段，作为审计依据。
+>
+> **不要手工编辑 `data/knowledge/blacklist.yaml`**。走 `blacklist.py import` —— 它负责校验 schema、
+> 去重、补 `added` / `source` / `authorized` 字段；手工改文件会丢审计信息，也无法复现。
+> 单测或演示只用虚构名字（如 `示例电子商行`），**绝不拿真实店铺/品牌试**。
 
 匹配口径：**归一化后按别名子串命中**（`Tokmas(托克马斯)` 归一成 `tokmas托克马斯`，`tokmas`、`托克马斯` 都算命中），
 不做模糊纠错（`Tokma` 不命中 `Tokmas`）—— 宁可漏杀，不可误杀。
@@ -174,7 +183,6 @@ python scripts/blacklist.py remove "Tokmas(托克马斯)" --kind brand
 **店铺名**（淘宝 `it.shop.name` / 1688 `it.company`）本来就抓得到，所以淘宝侧可以按店做黑名单：
 店名常带"全场包邮""电子元件 专用"等营销后缀，所以只能子串匹配、不能整串相等。
 白名单目前是"未拉黑即放行"的语义；需要指定优先店铺时，在 `blacklist.yaml` 里另建 `shops` 之外的分组（脚本不硬编码）。
-
 ## 配单流程（脚本已实现的部分标 ✅）
 
 | 步 | 做什么 | 脚本 |
@@ -267,8 +275,8 @@ python scripts/blacklist.py remove "Tokmas(托克马斯)" --kind brand
   （`C8734` 实测 36 条，含 APM32/CH32/HK32/CKS32 等国产替代；海外站同料只有 5 条）
 - BOM 解析：CSV/TSV/XLSX/纯文本，中英列名
 - **黑名单**：品牌（`Tokmas(托克马斯)` 实测剔除 `C53133678 ULN2803CDW(TOKMAS)` 并给替代 `C7494313`）、
-  店铺（淘宝 `深圳市优信电子科技有限公司 全场包邮` 子串命中）、料号三组，pick/bom/taobao 默认生效
-- **淘宝店名**：`taobao.py search` 结果带店铺列（`深圳市优信电子科技有限公司` 等），可做店铺黑白名单
+  店铺（淘宝店铺名带"全场包邮"等营销后缀时子串命中）、料号三组，pick/bom/taobao 默认生效
+- **淘宝店名**：`taobao.py search` 结果带店铺列（可直接做店铺黑白名单）
 - 指标核对：阻值/容值/电感/耐压/精度/功率/频率/封装 + MLCC/钽降额提示
 - 淘宝/1688：`taobao.py`（需真浏览器 + 淘宝登录态，走 Kimi WebBridge）；销量排序按 tab 点击，
   1688 用 `sortType=va_sales360`；单只价由标题数量归一（混装包/套装会被剔除，不当作有效比价）

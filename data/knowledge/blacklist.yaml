@@ -1,5 +1,6 @@
 # 黑名单 / 白名单（人工维护，可追溯）
-# 维护：python scripts/blacklist.py add|remove|list|check
+# 维护：python scripts/blacklist.py import|add|remove|list|check（写操作需 --authorized）
+# 不要手工编辑本文件：走 import 接口，它会补 added/source/authorized 审计字段
 # 口径：小写、去空白、去括号后按「别名子串」匹配；只挡对应维度，不静默替换型号
 schema: bom-sourcing/knowledge/blacklist
 version: 1
@@ -12,5 +13,6 @@ brands:
   reason: 批次一致性差，用户指定拉黑
   added: '2026-11-06'
   source: 用户指令 2026-11-06
+  authorized: 傅师傅 2026-11-06 指定 Tokmas(托克马斯) 拉黑
 shops: []
 codes: []
