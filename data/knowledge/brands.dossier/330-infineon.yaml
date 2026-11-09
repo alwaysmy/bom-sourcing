@@ -1,0 +1,45 @@
+schema: bom-sourcing/knowledge/brand-dossier
+version: 1
+generated: '2026-11-09'
+brand:
+  lcsc_brand_id: 330
+  name_lcsc: Infineon(英飞凌)
+  aliases:
+  - Infineon
+  legal_entity: 英飞凌科技（中国）有限公司
+  website: https://www.infineon.com/cn
+  country: DE
+  tier_suggested: trader
+  tier_final: original_idm
+  tier_override_reason: IDM 原厂（自有晶圆/封测产线 + 自有品牌 + 授权代理体系）
+  confidence: medium
+  authorized: 傅师傅 2026-11-09 指示按「料号数量 × 采购频次」优先级逐个跑背调（本轮=队列前 8 名）
+  tier_basis:
+  - 只有目录站/分销页，没有独立品牌资料
+evidence:
+- channel: authorized_dist
+  url: https://baike.baidu.com/item/%E5%8C%97%E4%BA%AC%E6%99%B6%E5%B7%9D%E7%94%B5%E5%AD%90%E6%8A%80%E6%9C%AF%E5%8F%91%E5%B1%95%E6%9C%89%E9%99%90%E8%B4%A3%E4%BB%BB%E5%85%AC%E5%8F%B8/4758097
+  claim: 北京晶川电子（1996 年成立，注册资本 5000 万）为英飞凌、EPCOS 授权代理商，主营 IGBT 模块与电力电容，曾获英飞凌亚太快速增长奖
+  grade: fact
+  confidence: high
+  note: null
+  fetched: '2026-11-09'
+- channel: authorized_dist
+  url: https://baike.baidu.com/item/%E6%B7%B1%E5%9C%B3%E5%B8%82%E9%A3%9E%E5%B0%BC%E5%A5%A5%E7%A7%91%E6%8A%80%E6%9C%89%E9%99%90%E5%85%AC%E5%8F%B8
+  claim: 深圳市飞尼奥科技为德国英飞凌 VAR 代理商与战略合作伙伴，主营 IGBT 模块/SiC 功率器件
+  grade: fact
+  confidence: medium
+  note: null
+  fetched: '2026-11-09'
+- channel: lcsc_brand_page
+  url: https://list.szlcsc.com/brand/
+  claim: 立创在售 10,770 条料号，横跨 16 个品类（三极管/DC-DC/二极管/EEPROM/MOSFET…）
+  grade: fact
+  confidence: high
+  note: null
+  fetched: '2026-11-09'
+gaps:
+- 未取证实体全称与工商信息
+- 赛普拉斯（Cypress）并入后的料号归属未逐条确认
+- 未查车规料号（AEC-Q100/Q101）的授权渠道
+conclusion: IDM 原厂（功率半导体第一梯队），中国有多家授权代理。**结论：可用**；MOSFET/IGBT 必须按手册核对 SOA 与雪崩能量。

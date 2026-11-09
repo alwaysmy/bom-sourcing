@@ -1,0 +1,45 @@
+schema: bom-sourcing/knowledge/brand-dossier
+version: 1
+generated: '2026-11-09'
+brand:
+  lcsc_brand_id: 170
+  name_lcsc: ROHM(罗姆)
+  aliases:
+  - ROHM
+  legal_entity: 罗姆半导体（上海）有限公司 / ROHM Co., Ltd.
+  website: https://www.rohm.com.cn
+  country: JP
+  tier_suggested: trader
+  tier_final: original_idm
+  tier_override_reason: IDM 原厂（自有晶圆/封测产线 + 自有品牌 + 授权代理体系）
+  confidence: high
+  authorized: 傅师傅 2026-11-09 指示按「料号数量 × 采购频次」优先级逐个跑背调（本轮=队列前 8 名）
+  tier_basis:
+  - 只有目录站/分销页，没有独立品牌资料
+evidence:
+- channel: authorized_dist
+  url: https://www.sekorm.com/ai/doc/599592667.html
+  claim: 世强先进（深圳）科技为 ROHM 官方授权代理；ROHM 1958 年创立、总部京都，在中国构建集开发/生产/销售一体的体制
+  grade: fact
+  confidence: high
+  note: null
+  fetched: '2026-11-09'
+- channel: official_doc
+  url: http://static.cninfo.com.cn/finalpage/2017-11-30/1204176166.PDF
+  claim: 上市公司公告披露代理品牌清单含 Rohm（罗姆）
+  grade: fact
+  confidence: high
+  note: null
+  fetched: '2026-11-09'
+- channel: lcsc_brand_page
+  url: https://list.szlcsc.com/brand/
+  claim: 立创在售 18,431 条料号，横跨 17 个品类（三极管/比较器/DC-DC/二极管/MOSFET…）
+  grade: fact
+  confidence: high
+  note: null
+  fetched: '2026-11-09'
+gaps:
+- 未核实中国法人主体全称
+- 未取证原厂官网授权代理名录
+- 未查翻新/假货投诉
+conclusion: IDM 原厂（功率/电源/模拟），中国有开发生产销售一体化体制。**结论：可用**；功率器件需按手册核对 SOA 与降额。

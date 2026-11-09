@@ -1,0 +1,45 @@
+schema: bom-sourcing/knowledge/brand-dossier
+version: 1
+generated: '2026-11-09'
+brand:
+  lcsc_brand_id: 100
+  name_lcsc: TI(德州仪器)
+  aliases:
+  - TI
+  legal_entity: 德州仪器半导体技术（上海）有限公司 / Texas Instruments
+  website: https://www.ti.com.cn
+  country: US
+  tier_suggested: domestic_second
+  tier_final: original_idm
+  tier_override_reason: IDM 原厂（自有晶圆/封测产线 + 自有品牌 + 授权代理体系）
+  confidence: high
+  authorized: 傅师傅 2026-11-09 指示按「料号数量 × 采购频次」优先级逐个跑背调（本轮=队列前 8 名）
+  tier_basis:
+  - 有自有品牌资料（官网/商标/工商），但无产线或代工模式证据
+evidence:
+- channel: official_site
+  url: https://www.ti.com.cn/general/cn/docs/gencontent.tsp?contentId=63312
+  claim: TI 官网列出中国区授权代理商：e络盟、大联大（WPG）、Digi-Key、Mouser 等；并明确警告「从未授权来源购买的产品可能是赝品」
+  grade: fact
+  confidence: high
+  note: null
+  fetched: '2026-11-09'
+- channel: business_registry
+  url: http://c.gongkong.com/PhoneVersion/companyInfo?cid=37108
+  claim: 德州仪器（上海）有限公司与北京代表处设客户技术支持中心；1996 年起实施中国发展战略
+  grade: fact
+  confidence: medium
+  note: null
+  fetched: '2026-11-09'
+- channel: lcsc_brand_page
+  url: https://list.szlcsc.com/brand/
+  claim: 立创在售 28,596 条料号，横跨 20 个品类（三极管/比较器/DC-DC/二极管/运放/MCU…）
+  grade: fact
+  confidence: high
+  note: null
+  fetched: '2026-11-09'
+gaps:
+- 未取证工商原始登记页
+- TI 中国授权代理名单为 2026 年快照，代理商可能变动
+- 车规级（AEC-Q100）料号的授权渠道未单独确认
+conclusion: IDM 原厂（模拟与嵌入式），官网直接公布授权代理名录，防伪体系明确。**结论：可用**；只从官方授权渠道采购，避免灰市。

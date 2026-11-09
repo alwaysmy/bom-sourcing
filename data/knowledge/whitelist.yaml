@@ -1,6 +1,6 @@
 schema: bom-sourcing/knowledge/whitelist
 version: 2
-generated: '2026-11-06'
+generated: '2026-11-09'
 brands:
   tokmas托克马斯:
     name: Tokmas(托克马斯)
@@ -31,3 +31,139 @@ brands:
     note: fabless，晶圆流片与封装均代工；代理话术（1995/6亿美元）不采信
     authorized: 傅师傅 2026-11-06 登记待办
     dossier: data/knowledge/brands.dossier/12489-tokmas.yaml
+  microchip美国微芯:
+    name: MICROCHIP(美国微芯)
+    aka:
+    - MICROCHIP
+    brand_id: 169
+    tier: original_idm
+    approved:
+    - family: '*'
+      label: 全线品类（IDM 原厂）
+      catalog_id: null
+      basis: https://www.microchip.com 自有产线 + 中国授权代理体系 + 立创在售料号实测
+      grade: fact
+      date: '2026-11-09'
+    pending: []
+    note: IDM 原厂（自有晶圆/封测产线 + 自有品牌 + 授权代理体系）
+    authorized: 傅师傅 2026-11-09 指示按「料号数量 × 采购频次」优先级逐个跑背调（本轮=队列前 8 名）
+    dossier: data/knowledge/brands.dossier/169-microchip.yaml
+  panasonic松下:
+    name: PANASONIC(松下)
+    aka:
+    - PANASONIC
+    brand_id: 121
+    tier: original_idm
+    approved:
+    - family: '*'
+      label: 全线品类（IDM 原厂）
+      catalog_id: null
+      basis: https://www.panasonic.com/global/industry.html 自有产线 + 中国授权代理体系 + 立创在售料号实测
+      grade: fact
+      date: '2026-11-09'
+    pending: []
+    note: IDM 原厂（自有晶圆/封测产线 + 自有品牌 + 授权代理体系）
+    authorized: 傅师傅 2026-11-09 指示按「料号数量 × 采购频次」优先级逐个跑背调（本轮=队列前 8 名）
+    dossier: data/knowledge/brands.dossier/121-panasonic.yaml
+  vishay威世:
+    name: VISHAY(威世)
+    aka:
+    - VISHAY
+    brand_id: 91
+    tier: original_idm
+    approved:
+    - family: '*'
+      label: 全线品类（IDM 原厂）
+      catalog_id: null
+      basis: https://www.vishay.com 自有产线 + 中国授权代理体系 + 立创在售料号实测
+      grade: fact
+      date: '2026-11-09'
+    pending: []
+    note: IDM 原厂（自有晶圆/封测产线 + 自有品牌 + 授权代理体系）
+    authorized: 傅师傅 2026-11-09 指示按「料号数量 × 采购频次」优先级逐个跑背调（本轮=队列前 8 名）
+    dossier: data/knowledge/brands.dossier/91-vishay.yaml
+  ti德州仪器:
+    name: TI(德州仪器)
+    aka:
+    - TI
+    brand_id: 100
+    tier: original_idm
+    approved:
+    - family: '*'
+      label: 全线品类（IDM 原厂）
+      catalog_id: null
+      basis: https://www.ti.com.cn 自有产线 + 中国授权代理体系 + 立创在售料号实测
+      grade: fact
+      date: '2026-11-09'
+    pending: []
+    note: IDM 原厂（自有晶圆/封测产线 + 自有品牌 + 授权代理体系）
+    authorized: 傅师傅 2026-11-09 指示按「料号数量 × 采购频次」优先级逐个跑背调（本轮=队列前 8 名）
+    dossier: data/knowledge/brands.dossier/100-ti.yaml
+  rohm罗姆:
+    name: ROHM(罗姆)
+    aka:
+    - ROHM
+    brand_id: 170
+    tier: original_idm
+    approved:
+    - family: '*'
+      label: 全线品类（IDM 原厂）
+      catalog_id: null
+      basis: https://www.rohm.com.cn 自有产线 + 中国授权代理体系 + 立创在售料号实测
+      grade: fact
+      date: '2026-11-09'
+    pending: []
+    note: IDM 原厂（自有晶圆/封测产线 + 自有品牌 + 授权代理体系）
+    authorized: 傅师傅 2026-11-09 指示按「料号数量 × 采购频次」优先级逐个跑背调（本轮=队列前 8 名）
+    dossier: data/knowledge/brands.dossier/170-rohm.yaml
+  renesas瑞萨/idt:
+    name: RENESAS(瑞萨)/IDT
+    aka:
+    - RENESAS
+    brand_id: 134
+    tier: original_idm
+    approved:
+    - family: '*'
+      label: 全线品类（IDM 原厂）
+      catalog_id: null
+      basis: https://www.renesas.com/cn 自有产线 + 中国授权代理体系 + 立创在售料号实测
+      grade: fact
+      date: '2026-11-09'
+    pending: []
+    note: IDM 原厂（自有晶圆/封测产线 + 自有品牌 + 授权代理体系）
+    authorized: 傅师傅 2026-11-09 指示按「料号数量 × 采购频次」优先级逐个跑背调（本轮=队列前 8 名）
+    dossier: data/knowledge/brands.dossier/134-renesas-idt.yaml
+  infineon英飞凌:
+    name: Infineon(英飞凌)
+    aka:
+    - Infineon
+    brand_id: 330
+    tier: original_idm
+    approved:
+    - family: '*'
+      label: 全线品类（IDM 原厂）
+      catalog_id: null
+      basis: https://www.infineon.com/cn 自有产线 + 中国授权代理体系 + 立创在售料号实测
+      grade: fact
+      date: '2026-11-09'
+    pending: []
+    note: IDM 原厂（自有晶圆/封测产线 + 自有品牌 + 授权代理体系）
+    authorized: 傅师傅 2026-11-09 指示按「料号数量 × 采购频次」优先级逐个跑背调（本轮=队列前 8 名）
+    dossier: data/knowledge/brands.dossier/330-infineon.yaml
+  nxp恩智浦:
+    name: NXP(恩智浦)
+    aka:
+    - NXP
+    brand_id: 89
+    tier: original_idm
+    approved:
+    - family: '*'
+      label: 全线品类（IDM 原厂）
+      catalog_id: null
+      basis: https://www.nxp.com.cn 自有产线 + 中国授权代理体系 + 立创在售料号实测
+      grade: fact
+      date: '2026-11-09'
+    pending: []
+    note: IDM 原厂（自有晶圆/封测产线 + 自有品牌 + 授权代理体系）
+    authorized: 傅师傅 2026-11-09 指示按「料号数量 × 采购频次」优先级逐个跑背调（本轮=队列前 8 名）
+    dossier: data/knowledge/brands.dossier/89-nxp.yaml

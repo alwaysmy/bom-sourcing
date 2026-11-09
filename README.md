@@ -63,6 +63,7 @@ scripts/blacklist.py     品牌 / 店铺 / 料号黑名单（pick、bom、taobao
 scripts/brands.py        品牌索引（按品类枚举立创品牌 facet，1,296 品牌）
 scripts/brand_dossier.py 品牌背调档案（多渠道取证 + 事实/自述/推论三级标注 + 分层判定）
 scripts/whitelist.py     品牌白名单（按「品牌 × 品类」放行；写操作需 --authorized）
+scripts/brand_queue.py   品牌背调队列（料号数 × 品类广度 × 采购频次排优先级）
 data/categories.yaml  26 family 的品类 id、参数键与关键约束
 data/spec-rules.yaml  32 family 的 critical/relaxable 参数、降额基准、风险备注
 data/knowledge/       渠道、风险、降额、工作流、厂商 tier、黑名单、品牌索引、MOSFET 判据、品牌档案

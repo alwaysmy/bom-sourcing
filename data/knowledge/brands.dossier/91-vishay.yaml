@@ -1,0 +1,47 @@
+schema: bom-sourcing/knowledge/brand-dossier
+version: 1
+generated: '2026-11-09'
+brand:
+  lcsc_brand_id: 91
+  name_lcsc: VISHAY(威世)
+  aliases:
+  - VISHAY
+  legal_entity: Vishay Intertechnology, Inc.（中国设办事处与授权代理）
+  website: https://www.vishay.com
+  country: US
+  tier_suggested: original_fabless
+  tier_final: original_idm
+  tier_override_reason: IDM 原厂（自有晶圆/封测产线 + 自有品牌 + 授权代理体系）
+  confidence: high
+  authorized: 傅师傅 2026-11-09 指示按「料号数量 × 采购频次」优先级逐个跑背调（本轮=队列前 8 名）
+  tier_basis:
+  - 自有品牌 + 代工/授权代理证据
+evidence:
+- channel: authorized_dist
+  url: http://ec.eepw.com.cn/mfmember/brief/userid/4821
+  claim: 香港威柏电子（Westpac）1996 年起为 BC components（后被 VISHAY 收购）分立元件授权分销商，2005 年起为 VISHAY
+    国内汽车全线电子元器件代理；页面列 VISHAY 官方授权查询入口
+  grade: fact
+  confidence: high
+  note: null
+  fetched: '2026-11-09'
+- channel: business_registry
+  url: https://www.yzcx.com/agent/detail1039
+  claim: Vishay 在中国设有办事处：Vishay Transducers China（天津）、Vishay Shenzhen Representative
+    Office
+  grade: fact
+  confidence: medium
+  note: null
+  fetched: '2026-11-09'
+- channel: lcsc_brand_page
+  url: https://list.szlcsc.com/brand/
+  claim: 立创在售 310,047 条料号（全站第一），横跨 16 个品类（磁珠/三极管/晶振/DC-DC/电阻/电容…）
+  grade: fact
+  confidence: high
+  note: null
+  fetched: '2026-11-09'
+gaps:
+- 未核实 Vishay 中国法人主体（多为代表处，非独立法人）
+- 并购品牌（BCcomponents/Dale/Sprague/Siliconix）的产线归属未逐条确认
+- 未取证原厂官网授权代理名录页
+conclusion: IDM 原厂（并购整合型，分立器件与无源件全线），料号规模立创第一。**结论：可用**；老料号需注意并购前品牌（BC/Dale）的等效性。

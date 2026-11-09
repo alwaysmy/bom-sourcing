@@ -176,6 +176,10 @@ def _find(data: dict, key: str):
 
 
 def _family_match(item: dict, family=None, catalog_id=None) -> bool:
+    # family == "*" 表示「全线品类放行」：仅当品牌是自有产线的 IDM 原厂时可用
+    # （产线、质量体系、追溯链覆盖全部产品线，不存在"这个品类是别人代工"的问题）
+    if str(item.get("family") or "").strip() == "*":
+        return True
     if family:
         fam = str(family).strip().lower()
         if str(item.get("family") or "").strip().lower() == fam:

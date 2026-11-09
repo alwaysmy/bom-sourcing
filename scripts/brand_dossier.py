@@ -305,7 +305,7 @@ def render_md(doc) -> str:
     out.append(f"- 立创品牌 id：`{b.get('lcsc_brand_id')}`")
     out.append(f"- 工商主体：{b.get('legal_entity') or '**未查到**'}")
     out.append(f"- 官网：{b.get('website') or '**未查到**'}")
-    out.append(f"- 建议分层：`{b.get('tier_suggested')}`（把握 {b.get('confidence')}）")
+    out.append(f"- 机械判定（仅按证据关键词，可能偏保守）：`{b.get('tier_suggested')}`（把握 {b.get('confidence')}）")
     if b.get("tier_final") and b["tier_final"] != b.get("tier_suggested"):
         out.append(f"- 人工覆盖：`{b['tier_final']}` —— {b.get('tier_override_reason') or '未写理由'}")
     out.append(f"- 取证时间：{doc.get('generated')}")
@@ -380,8 +380,12 @@ def cmd_list(directory: str | None = None) -> str:
     for f in files:
         doc = yaml.safe_load(f.read_text(encoding="utf-8"))
         b = doc.get("brand", {})
+        # 显示最终分层：人工覆盖优先，* 标记与建议分层不同
+        tier = b.get("tier_final") or b.get("tier_suggested")
+        if b.get("tier_final") and b["tier_final"] != b.get("tier_suggested"):
+            tier = f"{tier} *"
         rows.append(f"| {b.get('lcsc_brand_id')} | {b.get('name_lcsc')} | "
-                    f"{b.get('legal_entity') or '—'} | {b.get('tier_suggested')} | "
+                    f"{b.get('legal_entity') or '—'} | {tier} | "
                     f"{b.get('confidence')} | {len(doc.get('evidence') or [])} |")
     return "\n".join(rows)
 

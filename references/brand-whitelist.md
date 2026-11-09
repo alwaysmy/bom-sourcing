@@ -107,6 +107,34 @@ python whitelist.py validate
 `--authorized "<谁/什么时候/为什么>"`，缺失直接 `exit 2`。**不要手工编辑 `whitelist.yaml`** ——
 脚本负责归一化、去重、补 `date` 与审计字段。
 
+### 5.1 全线放行（`family="*"`）
+
+只有**自有晶圆/封测产线的 IDM 原厂**才能用通配放行 —— 理由：产线、质量体系、追溯链覆盖该品牌全部产品线，
+不存在"这个品类其实是别人代工"的问题。
+
+```bash
+python whitelist.py approve "TI(德州仪器)" --family "*" --label "全线品类（IDM 原厂）" \
+    --basis "ti.com.cn 自有产线 + 中国授权代理体系 + 立创在售 28,596 条料号" --grade fact \
+    --authorized "傅师傅 2026-11-09 按背调结论放行"
+```
+
+判据（三条同时满足）：① 官网明确自有晶圆厂或封测厂；② 该品牌是自有商标/法人主体（不是代理）；
+③ 立创在售料号横跨多个不相关品类。**fabless / 二次品牌 / 贸易商不得用通配**，必须逐个品类核。
+
+### 5.2 从哪开始：品牌队列
+
+1,296 个品牌不可能一次背完，`brand_queue.py` 给优先级（料号数 × 品类广度 × 采购频次）：
+
+```bash
+python brand_queue.py --limit 20        # 分数降序；状态 done/partial/pending/kb_only/unknown
+python brand_queue.py --pending         # 只列还没背调的
+python brand_queue.py --family mosfet   # 按品类过滤
+```
+
+**一批的闭环**：`--limit 8` 取队首 → 逐个网络取证 → `brand_dossier.py new/add/gaps/conclusion/render`
+→ `whitelist.py approve`（含 `add_brand` 补 brand_id/tier/dossier） → `brand_dossier.py list` +
+`whitelist.py list` 复核 → 提交。一轮 8 个约消耗 16–20 次检索请求（`web_search` 每次 1–4 条查询）。
+
 ## 6. 与 pick.py / bom.py 的集成
 
 两个入口默认都会做白名单核对（`--no-whitelist` 关闭），输出「## 品牌白名单核对」段：

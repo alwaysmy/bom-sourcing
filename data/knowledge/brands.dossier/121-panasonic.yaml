@@ -1,0 +1,45 @@
+schema: bom-sourcing/knowledge/brand-dossier
+version: 1
+generated: '2026-11-09'
+brand:
+  lcsc_brand_id: 121
+  name_lcsc: PANASONIC(松下)
+  aliases:
+  - PANASONIC
+  legal_entity: 松下电器（中国）有限公司 / Panasonic Industry
+  website: https://www.panasonic.com/global/industry.html
+  country: JP
+  tier_suggested: trader
+  tier_final: original_idm
+  tier_override_reason: IDM 原厂（自有晶圆/封测产线 + 自有品牌 + 授权代理体系）
+  confidence: high
+  authorized: 傅师傅 2026-11-09 指示按「料号数量 × 采购频次」优先级逐个跑背调（本轮=队列前 8 名）
+  tier_basis:
+  - 只有目录站/分销页，没有独立品牌资料
+evidence:
+- channel: authorized_dist
+  url: https://www.eet-china.com/mp/a526233.html
+  claim: AMEYA360 为 PANASONIC 松下授权代理商，可提供松下全系列元器件一站式供货（薄膜电容/HE 继电器/PhotoMOS/电感/连接器）
+  grade: fact
+  confidence: high
+  note: null
+  fetched: '2026-11-09'
+- channel: official_doc
+  url: http://static.cninfo.com.cn/finalpage/2017-11-30/1204176166.PDF
+  claim: 上市公司公告披露代理品牌清单含 Panasonic（松下），与博通/赛普拉斯/罗姆/威世并列
+  grade: fact
+  confidence: high
+  note: null
+  fetched: '2026-11-09'
+- channel: lcsc_brand_page
+  url: https://list.szlcsc.com/brand/
+  claim: 立创在售 74,008 条料号，横跨 19 个品类（磁珠/三极管/DC-DC/二极管/连接器…）
+  grade: fact
+  confidence: high
+  note: null
+  fetched: '2026-11-09'
+gaps:
+- 未核实中国区法人主体（松下电器中国 vs Panasonic Industry 分工）
+- 未取证原厂授权代理名单官方页面
+- 松下机电与松下电器的品牌归属未逐条确认
+conclusion: IDM 原厂（百年综合电子集团），工业器件有独立事业部与授权代理体系。**结论：可用**；注意区分「松下电器」与「松下机电」两个主体。

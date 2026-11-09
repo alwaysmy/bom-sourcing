@@ -1,0 +1,45 @@
+schema: bom-sourcing/knowledge/brand-dossier
+version: 1
+generated: '2026-11-09'
+brand:
+  lcsc_brand_id: 134
+  name_lcsc: RENESAS(瑞萨)/IDT
+  aliases:
+  - RENESAS
+  legal_entity: 瑞萨电子（中国）有限公司
+  website: https://www.renesas.com/cn
+  country: JP
+  tier_suggested: trader
+  tier_final: original_idm
+  tier_override_reason: IDM 原厂（自有晶圆/封测产线 + 自有品牌 + 授权代理体系）
+  confidence: medium
+  authorized: 傅师傅 2026-11-09 指示按「料号数量 × 采购频次」优先级逐个跑背调（本轮=队列前 8 名）
+  tier_basis:
+  - 只有目录站/分销页，没有独立品牌资料
+evidence:
+- channel: authorized_dist
+  url: https://baike.baidu.com/item/%E4%B8%8A%E6%B5%B7%E5%8F%8B%E8%8F%B1%E7%94%B5%E5%AD%90%E6%9C%89%E9%99%90%E5%85%AC%E5%8F%B8
+  claim: 上海友菱电子（港澳台法人独资）为日本瑞萨电子、三菱电机等产品授权代理商，2006 年获瑞萨 Top distributor 奖
+  grade: fact
+  confidence: high
+  note: null
+  fetched: '2026-11-09'
+- channel: authorized_dist
+  url: https://wapbaike.baidu.com/item/%E4%B8%8A%E6%B5%B7%E5%94%90%E8%BE%89%E7%94%B5%E5%AD%90%E6%9C%89%E9%99%90%E5%85%AC%E5%8F%B8/8323370
+  claim: 上海唐辉电子为瑞萨 Renesas 大中华区代理（同时代理 KDS/贝岭/力特）
+  grade: fact
+  confidence: medium
+  note: null
+  fetched: '2026-11-09'
+- channel: lcsc_brand_page
+  url: https://list.szlcsc.com/brand/
+  claim: 立创在售 19,939 条料号，横跨 18 个品类（三极管/比较器/晶振/DC-DC/MCU…）
+  grade: fact
+  confidence: high
+  note: null
+  fetched: '2026-11-09'
+gaps:
+- 瑞萨与 IDT 合并后的品牌归属（IDT 料号是否统一）未确认
+- 未取证原厂官网授权代理名录
+- 未查车规料号的授权渠道
+conclusion: IDM 原厂（MCU/模拟/功率，含原 IDT 产品线），中国有多家授权代理。**结论：可用**；IDT 老料号注意交期与替代关系。

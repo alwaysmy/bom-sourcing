@@ -289,6 +289,25 @@ python whitelist.py list                                           # 看全量
 写操作同样要 `--authorized`（与 `blacklist.py` / `brand_dossier.py` 一套门禁）。
 档案落 `data/knowledge/whitelist.yaml`；方法论见 `references/brand-whitelist.md`。
 
+### 从哪开始背调：品牌队列
+
+1,296 个品牌不可能一次背完，`brand_queue.py` 按「**料号数量 × 品类广度 × 采购频次**」排优先级：
+
+```bash
+cd scripts
+python brand_queue.py --limit 20            # 待背调队列（按分数降序）
+python brand_queue.py --pending           # 只看还没背调的
+python brand_queue.py --family mosfet     # 按品类过滤
+```
+
+分数口径：`2.0*log10(料号数+1) + 0.4*品类数 + 1.5*常用品类命中数 + 6.0*已登记待背调 - 3.0*已覆盖 - 1.0*知识库已有分层`。
+「常用品类」= 电阻/电容/电感/磁珠/LED/二极管/肖特基/TVS/ESD/MOSFET/BJT/LDO/DC-DC/MCU/晶振/连接器/EEPROM/Flash 这 18 类，作为采购频次的代理。
+
+**一批的做法**：`brand_queue.py --limit 8` → 逐个 `web_search` 取证（工商/官网/授权代理/商标/社区）→
+`brand_dossier.py new/add/gaps/conclusion/render` 建档案 → `whitelist.py approve` 放行 →
+`brand_dossier.py list` + `whitelist.py list` 复核 → 提交。IDM 原厂（自有晶圆/封测产线）
+用 `family="*"` 全线放行；非 IDM 必须逐个品类核。
+
 ## 判据边界（立创给不了什么 —— 以 MOSFET 为例）
 
 立创的 `paramLinkedMap` **只对少部分器件有完整参数**。实测场效应管品类（`catalogIdFilter=381`）
@@ -380,6 +399,7 @@ python whitelist.py list                                           # 看全量
 | `scripts/brands.py` | **品牌索引**：按品类枚举立创品牌 facet（1,296 品牌），查品牌/覆盖率体检 | 纯标准库 + pyyaml |
 | `scripts/brand_dossier.py` | **品牌背调档案**：多渠道取证 + 事实/自述/推论三级标注 + 分层判定 + 出报告 | 纯标准库 + pyyaml |
 | `scripts/whitelist.py` | **品牌白名单**：按「品牌 × 品类」放行（approved/kb_known/pending/跨品类/unknown），写操作需授权 | 纯标准库 + pyyaml |
+| `scripts/brand_queue.py` | **品牌背调队列**：按料号数 × 品类广度 × 采购频次排优先级，回答"下一步该背谁" | 纯标准库 + pyyaml |
 
 公共约定：价格为**人民币含税单价**并按数量取阶梯；结果带抓取时间；缓存默认 6 小时
 （`%LOCALAPPDATA%\bom-sourcing\cache`，`--no-cache` 关闭）。
