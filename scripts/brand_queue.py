@@ -167,6 +167,9 @@ def main(argv=None):
     rows = load_queue()
     if a.pending:
         rows = [r for r in rows if r["status"] in ("pending", "unknown", "kb_only")]
+    # 默认按「先做没做的」排：待办状态优先，同状态内按分数降序
+    _order = {"pending": 0, "unknown": 1, "kb_only": 2, "partial": 3, "done": 4}
+    rows = sorted(rows, key=lambda r: (_order.get(r["status"], 9), -r["score"]))
     n = len(rows) if a.all else a.limit
     print(f"品牌总数 {len(load_queue())}｜本次列出 {min(n, len(rows))}｜"
           f"待背调 {sum(1 for r in load_queue() if r['status'] in ('pending', 'unknown'))}｜"
