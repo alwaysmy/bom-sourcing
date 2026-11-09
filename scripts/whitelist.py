@@ -40,7 +40,7 @@ from pathlib import Path
 
 SCHEMA = "bom-sourcing/knowledge/whitelist"
 VERSION = 2
-GRADES = ("fact", "claim", "inference")
+GRADES = ("fact", "claim", "inference", "common_knowledge")
 STATUSES = ("approved", "pending", "approved_other_family", "unknown", "blacklisted")
 
 DEFAULT_PATH = Path(__file__).resolve().parent.parent / "data" / "knowledge" / "whitelist.yaml"
@@ -52,6 +52,7 @@ STATUS_LABEL = {
     "approved_other_family": "⚠ 跨品类未核",
     "unknown": "❔ 未背调",
     "blacklisted": "⛔ 已拉黑",
+    "rejected": "🚫 不推荐（停业/高风险）",
 }
 
 VENDORS_PATH = Path(__file__).resolve().parent.parent / "data" / "knowledge" / "vendors.yaml"
@@ -154,6 +155,27 @@ def _auth(value: str) -> str:
     return str(value).strip()
 
 
+def _resolve_via_index(key: str):
+    """用 brands.index.yaml 的 merge_into 把「被拆成两条的品牌」找回主档 brand_id。
+
+    例：立创把 ADI 拆成 `178 ADI(亚德诺)` 与 `234 ADI(亚德诺)/MAXIM(美信)`，
+    白名单只登记主档 178；拿 234 的名称来查时这里负责归到 178。
+    """
+    try:
+        import brands as _b
+        idx = _b.load_index()
+    except Exception:  # noqa: BLE001 索引坏了不该拖垮白名单
+        return None
+    k = norm(key)
+    if not k:
+        return None
+    for bid, e in idx.items():
+        pool = [bid, e.get("name"), e.get("short"), e.get("cn")] + list(e.get("aliases") or [])
+        if any(norm(x) == k for x in pool if x):
+            return str(_b.resolve(bid, _idx=idx))
+    return None
+
+
 def _find(data: dict, key: str):
     """按 name / 别名 / brand_id / 文件名 slug 找条目，返回 (slug, entry) 或 (None, None)。"""
     if not key:
@@ -167,11 +189,18 @@ def _find(data: dict, key: str):
         names = [slug, e.get("name") or ""] + list(e.get("aka") or [])
         if any(norm(n) == k for n in names if n):
             return slug, e
-    # 子串兜底（品牌全称包含简称）
+    # 子串兜底（品牌全称包含简称）；短名（如 aka "TI"）太容易误命中，只在双方都 ≥3 字符时用
     for slug, e in data.get("brands", {}).items():
         names = [slug, e.get("name") or ""] + list(e.get("aka") or [])
-        if any(k and (k in norm(n) or norm(n) in k) for n in names if n):
+        if any(k and (k in nn or nn in k) for nn in (norm(n) for n in names if n)
+               if len(nn) >= 3 and len(k) >= 3):
             return slug, e
+    # 归并兜底：立创拆成多条的品牌，按主档 brand_id 再找一次
+    main = _resolve_via_index(key)
+    if main:
+        for slug, e in data.get("brands", {}).items():
+            if str(e.get("brand_id") or "") == main:
+                return slug, e
     return None, None
 
 
@@ -214,6 +243,12 @@ def status(brand, family=None, catalog_id=None, data=None, vendors=None) -> dict
                 "entry": None, "matched": None}
     approved = entry.get("approved") or []
     pending = entry.get("pending") or []
+    # 品牌整体判死（停业 / 假冒 / 明确不用）：优先于品类，直接给结论
+    if entry.get("verdict") == "rejected":
+        return {"status": "rejected", "label": STATUS_LABEL["rejected"],
+                "tier": entry.get("tier"),
+                "note": entry.get("verdict_reason") or "品牌已判不推荐，需找替代",
+                "entry": entry, "matched": None}
     if family or catalog_id:
         for a in approved:
             if _family_match(a, family, catalog_id):
@@ -386,6 +421,35 @@ def approve(brand, family=None, label=None, catalog_id=None, basis=None, grade="
                    path, authorized)
 
 
+def preclear(brands, basis=None, path=None, authorized=None) -> list:
+    """免背调放行：业界公认的大厂（高置信度已知，不需要逐次检索取证）。
+
+    与 `approve()` 的区别只在语义与 `grade`：这里写 `common_knowledge`，并在品牌条目上
+    打 `precleared: true`，`brand_queue.py` 据此不再把它列进待办。
+
+    **判据（必须同时满足）**：① 该品牌是业界公认的原厂/大厂（多年在售、主流分销渠道常备）；
+    ② 知识库里已有其分层（vendors.yaml）或属于常识范畴；③ 不涉及需要核实的产线/代工关系。
+    **不确定就老老实实背调** —— 免背调是省时间，不是省证据。
+    """
+    _auth(authorized)
+    if not basis:
+        raise ValueError("免背调必须写 --basis（为什么这个品牌可以不取证）")
+    out = []
+    data = load(path)
+    for brand in brands:
+        item = _upsert("approved", brand, "*", "全线品类（业界公认大厂，免逐次背调）", None,
+                       basis, None, "common_knowledge", None, path, authorized)
+        data = load(path)
+        _slug, entry = _find(data, brand)
+        if entry is not None:
+            entry["precleared"] = True
+            entry["precleared_basis"] = basis
+            entry["authorized"] = authorized
+            save(data, path)
+        out.append(item)
+    return out
+
+
 def pending(brand, family=None, label=None, catalog_id=None, reason=None,
             path=None, authorized=None) -> dict:
     return _upsert("pending", brand, family, label, catalog_id, None, reason, "fact", None,
@@ -422,6 +486,22 @@ def _fmt_row(slug, e):
     appr = "、".join(str(a.get("label") or a.get("family")) for a in (e.get("approved") or [])) or "-"
     pend = "、".join(str(a.get("label") or a.get("family")) for a in (e.get("pending") or [])) or "-"
     return f"| {e.get('brand_id') or '-'} | {e.get('name')} | {e.get('tier')} | {appr} | {pend} |"
+
+
+def reject(brand, reason=None, path=None, authorized=None) -> dict:
+    """品牌整体判不推荐（停业 / 假冒 / 明确不用）：优先于品类判定。"""
+    _auth(authorized)
+    if not reason:
+        raise ValueError("判不推荐必须写 --reason（依据是什么）")
+    data = load(path)
+    _slug, entry = _find(data, brand)
+    if entry is None:
+        raise KeyError(f"白名单里没有「{brand}」，先 add 再 reject")
+    entry["verdict"] = "rejected"
+    entry["verdict_reason"] = reason
+    entry["authorized"] = authorized
+    save(data, path)
+    return entry
 
 
 def main(argv=None):
@@ -470,6 +550,11 @@ def main(argv=None):
     sp.add_argument("--reason")
     sp.add_argument("--authorized", required=True)
 
+    sp = sub.add_parser("reject", help="品牌整体判不推荐（停业/假冒/不用）")
+    sp.add_argument("brand")
+    sp.add_argument("--reason", required=True)
+    sp.add_argument("--authorized", required=True)
+
     sub.add_parser("validate", help="校验文件")
 
     a = ap.parse_args(argv)
@@ -514,6 +599,10 @@ def main(argv=None):
             it = pending(a.brand, a.family, a.label, a.catalog_id, a.reason, a.file,
                          a.authorized)
             print(f"已登记待背调：{a.brand} @ {it['label']}")
+            return 0
+        if a.cmd == "reject":
+            reject(a.brand, a.reason, a.file, a.authorized)
+            print(f"已判不推荐：{a.brand} —— {a.reason}")
             return 0
         if a.cmd == "validate":
             errs = validate(load(a.file))

@@ -238,6 +238,8 @@ index:
     - tvs
     part_count: 48197
     in_vendors: false
+    merged_from:
+    - '11629'
   '437':
     name: CTS(西迪斯)
     short: CTS
@@ -336,6 +338,8 @@ index:
     - inductor
     part_count: 24663
     in_vendors: false
+    merged_from:
+    - '13211'
   '1199':
     name: SUSUMU
     short: SUSUMU
@@ -523,6 +527,8 @@ index:
     - vref
     part_count: 15991
     in_vendors: false
+    merged_from:
+    - '234'
   '369':
     name: TDK
     short: TDK
@@ -611,6 +617,8 @@ index:
     - tvs
     part_count: 14055
     in_vendors: false
+    merged_from:
+    - '817'
   '11643':
     name: VBsemi(微碧半导体)
     short: VBsemi
@@ -696,6 +704,8 @@ index:
     - resistor
     part_count: 11738
     in_vendors: true
+    merged_from:
+    - '12391'
   '815':
     name: Amphenol
     short: Amphenol
@@ -710,6 +720,8 @@ index:
     - relay
     part_count: 11367
     in_vendors: false
+    merged_from:
+    - '12941'
   '215':
     name: ABLIC(艾普凌科)
     short: ABLIC
@@ -751,6 +763,8 @@ index:
     - tvs
     part_count: 10770
     in_vendors: false
+    merged_from:
+    - '199'
   '63':
     name: FH(风华)
     short: FH
@@ -962,6 +976,8 @@ index:
     - oscillator
     part_count: 7667
     in_vendors: false
+    merge_into: '330'
+    merge_reason: Infineon 2020 年完成对 Cypress 的收购
   '11578':
     name: Comchip(典琦)
     short: Comchip
@@ -1075,6 +1091,8 @@ index:
     - vref
     part_count: 6528
     in_vendors: false
+    merge_into: '178'
+    merge_reason: ADI 2021 年完成对 Maxim Integrated 的收购，现为同一法人
   '1101':
     name: Nexperia(安世)
     short: Nexperia
@@ -1377,6 +1395,8 @@ index:
     - vref
     part_count: 3740
     in_vendors: false
+    ambiguous: true
+    ambiguous_reason: Skyworks 与 Silicon Labs 是两家独立公司，facet 用 / 合并命名；归并会导致张冠李戴
   '12667':
     name: MSKSEMI(美森科)
     short: MSKSEMI
@@ -1764,6 +1784,8 @@ index:
     - resistor
     part_count: 2480
     in_vendors: true
+    merge_into: '254'
+    merge_reason: 三星电子半导体事业部，同一法人下的产品线命名
   '11948':
     name: Leiditech(雷卯电子)
     short: Leiditech
@@ -2135,6 +2157,8 @@ index:
     - tvs
     part_count: 1661
     in_vendors: false
+    merge_into: '110'
+    merge_reason: Littelfuse 2017 年完成对 IXYS 的收购
   '15280':
     name: APV(爱普微)
     short: APV
@@ -2954,6 +2978,8 @@ index:
     - resistor
     part_count: 823
     in_vendors: false
+    ambiguous: true
+    ambiguous_reason: 2025 年 Altera 已从 Intel 拆分独立，历史料号归属需逐条看
   '13374':
     name: JUXING(钜兴)
     short: JUXING
@@ -4102,6 +4128,8 @@ index:
     - resistor
     part_count: 501
     in_vendors: false
+    merged_from:
+    - '871'
   '230':
     name: ISSI(北京矽成)
     short: ISSI
@@ -4930,6 +4958,8 @@ index:
     - inductor
     part_count: 337
     in_vendors: false
+    ambiguous: true
+    ambiguous_reason: 未确认是否同一法人（可能是同一代理集团下的两个品牌）
   '11450':
     name: HT(金誉)
     short: HT
@@ -6559,6 +6589,8 @@ index:
     - norflash
     part_count: 175
     in_vendors: false
+    merged_from:
+    - '304'
   '12741':
     name: 鑫飞宏
     short: 鑫飞宏
@@ -7014,6 +7046,8 @@ index:
     - inductor
     part_count: 144
     in_vendors: false
+    merged_from:
+    - '11776'
   '13030':
     name: WEIDA(韦达)
     short: WEIDA
@@ -7091,6 +7125,8 @@ index:
     - optocoupler
     part_count: 143
     in_vendors: false
+    merge_into: '1241'
+    merge_reason: TT Electronics 2015 年完成对 Optek Technology 的收购
   '988':
     name: Ruichips(锐骏半导体)
     short: Ruichips
@@ -7645,6 +7681,8 @@ index:
     - mcu
     part_count: 119
     in_vendors: false
+    merge_into: '191'
+    merge_reason: AMD 2022 年完成对 Xilinx 的收购
   '18538':
     name: GUQIAO(古桥微)
     short: GUQIAO
@@ -10290,6 +10328,8 @@ index:
     - inductor
     part_count: 32
     in_vendors: false
+    merge_into: '13239'
+    merge_reason: 同一品牌，facet 一条带中文一条不带
   '13867':
     name: PN Junction
     short: PN Junction
@@ -12124,6 +12164,8 @@ index:
     - led
     part_count: 11
     in_vendors: false
+    merge_into: '12792'
+    merge_reason: API 是 API Delevan 的品牌短名，同一法人
   '12073':
     name: Grenergy(南京绿芯)
     short: Grenergy
@@ -13036,6 +13078,8 @@ index:
     - inductor
     part_count: 6
     in_vendors: false
+    merge_into: '109'
+    merge_reason: TE Connectivity 2023 年完成对 Schaffner 的收购
   '11691':
     name: OptoSupply(光谷)
     short: OptoSupply
@@ -13190,6 +13234,8 @@ index:
     - connector
     part_count: 6
     in_vendors: false
+    merge_into: '815'
+    merge_reason: Amphenol 2023 年完成对 Positronic 的收购
   '13049':
     name: YIYUAN(怡远)
     short: YIYUAN

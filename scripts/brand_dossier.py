@@ -277,7 +277,8 @@ def validate(doc) -> list[str]:
             errs.append(f"{tag}.grade 非法：{e.get('grade')}")
         if e.get("confidence") not in CONFIDENCES:
             errs.append(f"{tag}.confidence 非法：{e.get('confidence')}")
-        if not (e.get("url") or "").startswith("http"):
+        # inference 是推导出来的，没有可点的来源；fact / claim 必须有 url 才能复核
+        if e.get("grade") != "inference" and not (e.get("url") or "").startswith("http"):
             errs.append(f"{tag}.url 必须是 http(s) 链接（结论要可复核）")
         if not e.get("claim"):
             errs.append(f"{tag}.claim 不能为空")

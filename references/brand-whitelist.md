@@ -40,8 +40,25 @@
 | `approved_other_family` | 品牌只在别的品类通过 | ❌ | 「该品牌只在 A 品类背调过，本品类未核」 |
 | `unknown` | 白名单与知识库都没有 | ❌ | 「必须先做品牌背调」 |
 | `blacklisted` | 命中黑名单（**优先级最高**） | ❌ | 「已拉黑」 |
+| `rejected` | 品牌整体判不推荐（停业/假冒） | ❌ | 「不推荐（停业/高风险）」+ 原因 |
 
 `blacklisted` 是为了让两个名单在同一条输出里语义自洽 —— 黑名单命中时不再讨论白名单状态。
+`rejected` 与黑名单的区别：黑名单是**用户要求别买**，`rejected` 是**背调结论别用**（如公司已停业），
+两者都优先于品类判定、都直接给结论。
+
+## 3.1 三种「不必逐品类核」的例外
+
+| 例外 | 命令 | 适用判据 |
+|---|---|---|
+| 免背调 `preclear` | `python whitelist.py preclear "<品牌>" --basis "<为什么>" --authorized "<谁/何时/为什么>"` | 业界公认原厂/IDM：多年在售、主流分销渠道常备、知识库已有分层；产品线覆盖全线，不存在需逐次核实的代工关系。写 `grade: common_knowledge` + `precleared: true` |
+| 判不推荐 `reject` | `python whitelist.py reject "<品牌>" --reason "<依据>" --authorized "..."` | 品牌整体判死（停业、假冒、明确不用）。`pick.py` / `bom.py` 显示 🚫 而不是静默推荐 |
+| 品牌归并 | `python brands.py apply-aliases` | 立创把同一家公司拆成多个 brand_id（`ADI(亚德诺)` 与 `ADI(亚德诺)/MAXIM(美信)`）。登记表 `data/knowledge/brand-aliases.yaml` 的 `merges` / `ambiguous` **由人工复核后写**，脚本只负责应用 |
+
+**免背调不是免证据**：判据是「不确定就老老实实背调」。fabless、二次品牌、贸易商一律不得用通配放行。
+
+**归并为什么要人工复核**：纯前缀规则误报极多 —— `AP`(1 条料) 是 APV/APM/APEC/APEX/APEM/aptchip/API 的前缀（全是不同公司）、
+`E-T-A` ⊂ `ETA(钰泰)`、`WEC` ⊂ `WECO`、`ST(意法半导体)` vs `ST(先科)`、`FOSAN(富捷)` vs `FOJAN(富捷)` 都必须分开；
+反过来 `SKYWORKS/SILICON LABS(芯科)`、`DDY/MYX`、`Intel/Altera`（2025 已拆分独立）**不能**归并，登记为 `ambiguous`。
 
 ## 4. 文件结构
 

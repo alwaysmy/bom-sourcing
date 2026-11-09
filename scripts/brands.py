@@ -52,6 +52,7 @@ ROOT = os.path.dirname(HERE)
 CATEGORIES = os.path.join(ROOT, "data", "categories.yaml")
 VENDORS = os.path.join(ROOT, "data", "knowledge", "vendors.yaml")
 INDEX = os.path.join(ROOT, "data", "knowledge", "brands.index.yaml")
+ALIASES = os.path.join(ROOT, "data", "knowledge", "brand-aliases.yaml")
 
 SCHEMA = "bom-sourcing/knowledge/brands-index"
 VERSION = 1
@@ -188,6 +189,11 @@ def build(path=INDEX, rate=1.0, sleep=0.0, verbose=True):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         yaml.safe_dump(doc, f, allow_unicode=True, sort_keys=False, width=200)
+    # 重建后自动应用人工归并登记，避免重扫把 merge_into 冲掉
+    try:
+        apply_aliases(path)
+    except Exception as e:  # noqa: BLE001 归并登记坏了不该拖垮重建
+        print(f"[警告] 应用 brand-aliases.yaml 失败：{e}", file=sys.stderr)
     return doc
 
 
@@ -196,24 +202,86 @@ def load_index(path=INDEX):
     return data.get("index") or {}
 
 
+# --------------------------------------------------------------------------- 归并
+
+def load_aliases(path=ALIASES):
+    """读人工复核过的品牌归并/歧义登记（见 data/knowledge/brand-aliases.yaml）。"""
+    data = load_yaml(path, {}) or {}
+    return data
+
+
+def apply_aliases(path=INDEX, aliases_path=ALIASES, write=True):
+    """把 brand-aliases.yaml 的 merge_into / ambiguous 落到索引里（不联网、不重扫）。
+
+    返回 {"merged": n, "ambiguous": n, "dangling": [...]}；dangling = 登记了但索引里
+    找不到的 from/to id（改名或立创重建索引后会出现，需要人工复核）。
+    """
+    data = load_yaml(path, {}) or {}
+    idx = data.get("index") or {}
+    al = load_aliases(aliases_path)
+    dangling = []
+    merged = 0
+    for m in al.get("merges") or []:
+        src, dst = str(m.get("from")), str(m.get("to"))
+        if src not in idx or dst not in idx:
+            dangling.append({"from": src, "to": dst, "reason": m.get("reason")})
+            continue
+        idx[src]["merge_into"] = dst
+        idx[src]["merge_reason"] = m.get("reason")
+        idx.setdefault(dst, {}).setdefault("merged_from", [])
+        if src not in idx[dst]["merged_from"]:
+            idx[dst]["merged_from"].append(src)
+        merged += 1
+    amb = 0
+    for a in al.get("ambiguous") or []:
+        bid = str(a.get("id"))
+        if bid not in idx:
+            dangling.append({"id": bid, "reason": a.get("reason")})
+            continue
+        idx[bid]["ambiguous"] = True
+        idx[bid]["ambiguous_reason"] = a.get("reason")
+        amb += 1
+    if write:
+        data["index"] = idx
+        with open(path, "w", encoding="utf-8") as f:
+            yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False, width=200)
+    return {"merged": merged, "ambiguous": amb, "dangling": dangling}
+
+
+def resolve(brand_id, path=INDEX, _idx=None):
+    """跟随 merge_into 找到主档 brand_id（防环）。"""
+    idx = _idx if _idx is not None else load_index(path)
+    seen = set()
+    cur = str(brand_id)
+    while cur in idx and idx[cur].get("merge_into") and cur not in seen:
+        seen.add(cur)
+        cur = str(idx[cur]["merge_into"])
+    return cur
+
+
 # --------------------------------------------------------------------------- 查询
 
 
 def lookup(text, path=INDEX, limit=10):
-    """按名字/中文名/别名/品牌号查（子串，忽略大小写与括号）。"""
+    """按名字/中文名/别名/品牌号查（子串，忽略大小写与括号）。
+
+    归并过的品牌（`merge_into`）不再单独返回 —— 直接给主档，避免同一个公司出两条。
+    """
     idx = load_index(path)
     q = norm(text)
     if not q:
         return []
-    hits = []
     if q.lstrip("c").isdigit() and q.startswith("c"):  # C123 形式
         q = q[1:]
+    hits = {}
     for bid, e in idx.items():
         pool = [bid, e.get("name"), e.get("short"), e.get("cn")] + list(e.get("aliases") or [])
         if any(x and q in norm(x) for x in pool):
-            hits.append(dict(e, brand_id=bid))
-    hits.sort(key=lambda e: -int(e.get("part_count") or 0))
-    return hits[:limit]
+            main = resolve(bid, _idx=idx)
+            hits.setdefault(main, dict(idx[main], brand_id=main))
+    out = list(hits.values())
+    out.sort(key=lambda e: -int(e.get("part_count") or 0))
+    return out[:limit]
 
 
 def coverage(path=INDEX, vendors_path=VENDORS):
@@ -292,6 +360,17 @@ def cmd_list(a):
     return 0
 
 
+def cmd_aliases(a):
+    rep = apply_aliases(write=not a.dry_run)
+    print(f"归并 {rep['merged']} 条，歧义登记 {rep['ambiguous']} 条"
+          f"{'（dry-run，未写盘）' if a.dry_run else ''}")
+    if rep["dangling"]:
+        print("\n⚠ 登记了但索引里找不到（需人工复核）：")
+        for d in rep["dangling"]:
+            print(f"  - {d}")
+    return 0
+
+
 def main(argv=None):
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
@@ -306,6 +385,10 @@ def main(argv=None):
     b.add_argument("--rate", type=float, default=1.0, help="同站最小间隔秒（默认 1.0）")
     b.add_argument("--sleep", type=float, default=0.0, help="额外等待秒")
     b.set_defaults(func=cmd_build)
+
+    al = sub.add_parser("apply-aliases", help="把 brand-aliases.yaml 的归并/歧义写进索引（不联网）")
+    al.add_argument("--dry-run", action="store_true")
+    al.set_defaults(func=cmd_aliases)
 
     lk = sub.add_parser("lookup", help="按名字/别名/品牌号查")
     lk.add_argument("text")

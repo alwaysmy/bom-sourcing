@@ -35,7 +35,7 @@ brands:
     name: MICROCHIP(美国微芯)
     aka:
     - MICROCHIP
-    brand_id: 169
+    brand_id: '169'
     tier: original_idm
     approved:
     - family: '*'
@@ -52,7 +52,7 @@ brands:
     name: PANASONIC(松下)
     aka:
     - PANASONIC
-    brand_id: 121
+    brand_id: '121'
     tier: original_idm
     approved:
     - family: '*'
@@ -69,7 +69,7 @@ brands:
     name: VISHAY(威世)
     aka:
     - VISHAY
-    brand_id: 91
+    brand_id: '91'
     tier: original_idm
     approved:
     - family: '*'
@@ -86,24 +86,26 @@ brands:
     name: TI(德州仪器)
     aka:
     - TI
-    brand_id: 100
+    brand_id: '100'
     tier: original_idm
     approved:
     - family: '*'
-      label: 全线品类（IDM 原厂）
+      label: 全线品类（业界公认大厂，免逐次背调）
       catalog_id: null
-      basis: https://www.ti.com.cn 自有产线 + 中国授权代理体系 + 立创在售料号实测
-      grade: fact
+      basis: 业界公认原厂/IDM（多年在售、主流分销渠道常备、官网与商标可查），vendors.yaml 已有分层；产品线覆盖全线品类，不存在需逐次核实的代工关系
+      grade: common_knowledge
       date: '2026-11-09'
     pending: []
     note: IDM 原厂（自有晶圆/封测产线 + 自有品牌 + 授权代理体系）
-    authorized: 傅师傅 2026-11-09 指示按「料号数量 × 采购频次」优先级逐个跑背调（本轮=队列前 8 名）
+    authorized: 傅师傅 2026-11-09 指示：知识库高置信度已知的大厂免走背调流程
     dossier: data/knowledge/brands.dossier/100-ti.yaml
+    precleared: true
+    precleared_basis: 业界公认原厂/IDM（多年在售、主流分销渠道常备、官网与商标可查），vendors.yaml 已有分层；产品线覆盖全线品类，不存在需逐次核实的代工关系
   rohm罗姆:
     name: ROHM(罗姆)
     aka:
     - ROHM
-    brand_id: 170
+    brand_id: '170'
     tier: original_idm
     approved:
     - family: '*'
@@ -120,7 +122,7 @@ brands:
     name: RENESAS(瑞萨)/IDT
     aka:
     - RENESAS
-    brand_id: 134
+    brand_id: '134'
     tier: original_idm
     approved:
     - family: '*'
@@ -137,7 +139,7 @@ brands:
     name: Infineon(英飞凌)
     aka:
     - Infineon
-    brand_id: 330
+    brand_id: '330'
     tier: original_idm
     approved:
     - family: '*'
@@ -154,7 +156,7 @@ brands:
     name: NXP(恩智浦)
     aka:
     - NXP
-    brand_id: 89
+    brand_id: '89'
     tier: original_idm
     approved:
     - family: '*'
@@ -167,3 +169,143 @@ brands:
     note: IDM 原厂（自有晶圆/封测产线 + 自有品牌 + 授权代理体系）
     authorized: 傅师傅 2026-11-09 指示按「料号数量 × 采购频次」优先级逐个跑背调（本轮=队列前 8 名）
     dossier: data/knowledge/brands.dossier/89-nxp.yaml
+  toshiba东芝:
+    name: TOSHIBA(东芝)
+    aka: []
+    brand_id: '72'
+    tier: unknown
+    approved:
+    - family: '*'
+      label: 全线品类（业界公认大厂，免逐次背调）
+      catalog_id: null
+      basis: 业界公认原厂/IDM（多年在售、主流分销渠道常备、官网与商标可查），vendors.yaml 已有分层；产品线覆盖全线品类，不存在需逐次核实的代工关系
+      grade: common_knowledge
+      date: '2026-11-09'
+    pending: []
+    note: ''
+    authorized: 傅师傅 2026-11-09 指示：知识库高置信度已知的大厂免走背调流程
+    precleared: true
+    precleared_basis: 业界公认原厂/IDM（多年在售、主流分销渠道常备、官网与商标可查），vendors.yaml 已有分层；产品线覆盖全线品类，不存在需逐次核实的代工关系
+    dossier: data/knowledge/brands.dossier/72-*.yaml
+  wurth伍尔特:
+    name: Wurth(伍尔特)
+    aka: []
+    brand_id: '795'
+    tier: unknown
+    approved:
+    - family: '*'
+      label: 全线品类（业界公认大厂，免逐次背调）
+      catalog_id: null
+      basis: 业界公认原厂/IDM（多年在售、主流分销渠道常备、官网与商标可查），vendors.yaml 已有分层；产品线覆盖全线品类，不存在需逐次核实的代工关系
+      grade: common_knowledge
+      date: '2026-11-09'
+    pending: []
+    note: ''
+    authorized: 傅师傅 2026-11-09 指示：知识库高置信度已知的大厂免走背调流程
+    precleared: true
+    precleared_basis: 业界公认原厂/IDM（多年在售、主流分销渠道常备、官网与商标可查），vendors.yaml 已有分层；产品线覆盖全线品类，不存在需逐次核实的代工关系
+    dossier: data/knowledge/brands.dossier/795-*.yaml
+  adi亚德诺:
+    name: ADI(亚德诺)
+    aka: []
+    brand_id: '178'
+    tier: unknown
+    approved:
+    - family: '*'
+      label: 全线品类（业界公认大厂，免逐次背调）
+      catalog_id: null
+      basis: 业界公认原厂/IDM（多年在售、主流分销渠道常备、官网与商标可查），vendors.yaml 已有分层；产品线覆盖全线品类，不存在需逐次核实的代工关系
+      grade: common_knowledge
+      date: '2026-11-09'
+    pending: []
+    note: ''
+    authorized: 傅师傅 2026-11-09 指示：知识库高置信度已知的大厂免走背调流程
+    precleared: true
+    precleared_basis: 业界公认原厂/IDM（多年在售、主流分销渠道常备、官网与商标可查），vendors.yaml 已有分层；产品线覆盖全线品类，不存在需逐次核实的代工关系
+    dossier: data/knowledge/brands.dossier/178-*.yaml
+  diodes美台:
+    name: DIODES(美台)
+    aka: []
+    brand_id: '296'
+    tier: unknown
+    approved:
+    - family: '*'
+      label: 全线品类（业界公认大厂，免逐次背调）
+      catalog_id: null
+      basis: 业界公认原厂/IDM（多年在售、主流分销渠道常备、官网与商标可查），vendors.yaml 已有分层；产品线覆盖全线品类，不存在需逐次核实的代工关系
+      grade: common_knowledge
+      date: '2026-11-09'
+    pending: []
+    note: ''
+    authorized: 傅师傅 2026-11-09 指示：知识库高置信度已知的大厂免走背调流程
+    precleared: true
+    precleared_basis: 业界公认原厂/IDM（多年在售、主流分销渠道常备、官网与商标可查），vendors.yaml 已有分层；产品线覆盖全线品类，不存在需逐次核实的代工关系
+    dossier: data/knowledge/brands.dossier/296-*.yaml
+  onsemi安森美:
+    name: onsemi(安森美)
+    aka: []
+    brand_id: '94'
+    tier: unknown
+    approved:
+    - family: '*'
+      label: 全线品类（业界公认大厂，免逐次背调）
+      catalog_id: null
+      basis: 业界公认原厂/IDM（多年在售、主流分销渠道常备、官网与商标可查），vendors.yaml 已有分层；产品线覆盖全线品类，不存在需逐次核实的代工关系
+      grade: common_knowledge
+      date: '2026-11-09'
+    pending: []
+    note: ''
+    authorized: 傅师傅 2026-11-09 指示：知识库高置信度已知的大厂免走背调流程
+    precleared: true
+    precleared_basis: 业界公认原厂/IDM（多年在售、主流分销渠道常备、官网与商标可查），vendors.yaml 已有分层；产品线覆盖全线品类，不存在需逐次核实的代工关系
+    dossier: data/knowledge/brands.dossier/94-*.yaml
+  st意法半导体:
+    name: ST(意法半导体)
+    aka: []
+    brand_id: '74'
+    tier: unknown
+    approved:
+    - family: '*'
+      label: 全线品类（业界公认大厂，免逐次背调）
+      catalog_id: null
+      basis: 业界公认原厂/IDM（多年在售、主流分销渠道常备、官网与商标可查），vendors.yaml 已有分层；产品线覆盖全线品类，不存在需逐次核实的代工关系
+      grade: common_knowledge
+      date: '2026-11-09'
+    pending: []
+    note: ''
+    authorized: 傅师傅 2026-11-09 指示：知识库高置信度已知的大厂免走背调流程
+    precleared: true
+    precleared_basis: 业界公认原厂/IDM（多年在售、主流分销渠道常备、官网与商标可查），vendors.yaml 已有分层；产品线覆盖全线品类，不存在需逐次核实的代工关系
+    dossier: data/knowledge/brands.dossier/74-*.yaml
+  teconnectivity泰科电子:
+    name: TE Connectivity(泰科电子)
+    aka: []
+    brand_id: '109'
+    tier: unknown
+    approved:
+    - family: '*'
+      label: 全线品类（业界公认大厂，免逐次背调）
+      catalog_id: null
+      basis: 业界公认原厂/IDM（多年在售、主流分销渠道常备、官网与商标可查），vendors.yaml 已有分层；产品线覆盖全线品类，不存在需逐次核实的代工关系
+      grade: common_knowledge
+      date: '2026-11-09'
+    pending: []
+    note: ''
+    authorized: 傅师傅 2026-11-09 指示：知识库高置信度已知的大厂免走背调流程
+    precleared: true
+    precleared_basis: 业界公认原厂/IDM（多年在售、主流分销渠道常备、官网与商标可查），vendors.yaml 已有分层；产品线覆盖全线品类，不存在需逐次核实的代工关系
+    dossier: data/knowledge/brands.dossier/109-*.yaml
+  nteelectronics:
+    name: NTE Electronics
+    aka:
+    - NTE
+    - NTE Electronics Inc
+    brand_id: '12927'
+    tier: trader
+    approved: []
+    pending: []
+    note: 售后替换件重铸分销商，2024 年停业
+    authorized: 傅师傅 2026-11-09 指定：NTE Electronics 单独做品牌背调
+    dossier: data/knowledge/brands.dossier/12927-*.yaml
+    verdict: rejected
+    verdict_reason: 2024 年永久停业 + 重铸贴牌（非制造商），新设计禁用；仅可维修替换

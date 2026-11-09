@@ -1,0 +1,79 @@
+# 立创品牌 facet 的归并与歧义登记
+#
+# 为什么需要：立创按"品牌"枚举 facet（`gradePlateGroup`），同一家公司可能被拆成两条
+# （带不带中文、带不带被收购品牌），也可能把两家不同公司塞进一条（用 `/` 连接）。
+# 这张表是**人工复核过**的结论，`brands.py` 应用后写入 `brands.index.yaml` 的
+# `merge_into` / `ambiguous` 字段；**不做运行时自动推断**（同名不同司的风险太高，
+# 例如 ST(意法半导体) vs ST(先科)、FOSAN(富捷) vs FOJAN(富捷)）。
+#
+# 维护约定：
+#   - 只有"确认同一法人/同一集团（含并购）"才写进 merges；
+#   - 一条 facet 名里塞了两家不同公司的，写进 ambiguous，**不归并**；
+#   - 每条都要写 reason，能追溯到并购公告或官方命名。
+
+schema: bom-sourcing/knowledge/brand-aliases
+version: 1
+generated: 2026-11-09
+
+merges:
+  - from: 234
+    from_name: ADI(亚德诺)/MAXIM(美信)
+    to: 178
+    to_name: ADI(亚德诺)
+    reason: ADI 2021 年完成对 Maxim Integrated 的收购，现为同一法人
+  - from: 199
+    from_name: Infineon/CYPRESS(赛普拉斯)
+    to: 330
+    to_name: Infineon(英飞凌)
+    reason: Infineon 2020 年完成对 Cypress 的收购
+  - from: 817
+    from_name: Littelfuse/IXYS
+    to: 110
+    to_name: Littelfuse(美国力特)
+    reason: Littelfuse 2017 年完成对 IXYS 的收购
+  - from: 304
+    from_name: AMD/XILINX(赛灵思)
+    to: 191
+    to_name: AMD(超微)
+    reason: AMD 2022 年完成对 Xilinx 的收购
+  - from: 11629
+    from_name: TE/Schaffner(夏弗纳)
+    to: 109
+    to_name: TE Connectivity(泰科电子)
+    reason: TE Connectivity 2023 年完成对 Schaffner 的收购
+  - from: 12941
+    from_name: Amphenol/Positronic
+    to: 815
+    to_name: Amphenol
+    reason: Amphenol 2023 年完成对 Positronic 的收购
+  - from: 871
+    from_name: TT Electronics/Optek Technology
+    to: 1241
+    to_name: TT Electronics
+    reason: TT Electronics 2015 年完成对 Optek Technology 的收购
+  - from: 12391
+    from_name: SAMSUNG(三星半导体)
+    to: 254
+    to_name: SAMSUNG(三星)
+    reason: 三星电子半导体事业部，同一法人下的产品线命名
+  - from: 11776
+    from_name: MAGLAYERS(美磊)
+    to: 13239
+    to_name: MAGLAYERS
+    reason: 同一品牌，facet 一条带中文一条不带
+  - from: 13211
+    from_name: API
+    to: 12792
+    to_name: API Delevan
+    reason: API 是 API Delevan 的品牌短名，同一法人
+
+ambiguous:
+  - id: 197
+    name: SKYWORKS/SILICON LABS(芯科)
+    reason: Skyworks 与 Silicon Labs 是两家独立公司，facet 用 / 合并命名；归并会导致张冠李戴
+  - id: 18591
+    name: DDY(德立)/MYX(铭易轩)
+    reason: 未确认是否同一法人（可能是同一代理集团下的两个品牌）
+  - id: 227
+    name: Intel/Altera
+    reason: 2025 年 Altera 已从 Intel 拆分独立，历史料号归属需逐条看

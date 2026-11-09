@@ -1,0 +1,94 @@
+schema: bom-sourcing/knowledge/brand-dossier
+version: 1
+generated: '2026-11-09'
+brand:
+  lcsc_brand_id: 12927
+  name_lcsc: NTE Electronics
+  aliases: []
+  legal_entity: NTE Electronics, Inc
+  website: https://www.nteinc.com（已下线）
+  country: US
+  tier_suggested: domestic_second
+  tier_final: domestic_second
+  tier_override_reason: null
+  confidence: medium
+  authorized: 傅师傅 2026-11-09 指定：NTE Electronics 单独做品牌背调
+  tier_basis:
+  - 有自有品牌资料（官网/商标/工商），但无产线或代工模式证据
+evidence:
+- channel: business_registry
+  url: https://www.gophotonics.com/companies/654/nte-electronics-inc
+  claim: NTE Electronics, Inc 注册地美国新泽西州 Bloomfield，地址 44 Farrand Street, Bloomfield,
+    NJ 07003（电话 973-748-5089），1979 年在新泽西成立。
+  grade: fact
+  confidence: high
+  note: 公司名录页，与多方转述的地址一致
+  fetched: '2026-11-09'
+- channel: distributor_page
+  url: https://www.brokerforum.com/components-parts/NTE/NTE5/NTE53-eTU-en.jsa
+  claim: 自述：1979 年起从只有十个替换件的乡镇供应商成长为业内最大的替换半导体供应商；NTE 半导体线 4,700+ 型号，交叉参考 50 万个行业器件；2001
+    年 1 月收购 Philips 北美 ECG 部门资产。
+  grade: fact
+  confidence: high
+  note: 品牌官方简介被多家分销站原样转载
+  fetched: '2026-11-09'
+- channel: distributor_page
+  url: https://www.elliottelectronicsupply.com/nte43.html
+  claim: NTE 不是半导体制造商（was not a manufacture of semiconductors），其编号体系是对 GE/Motorola/RCA(SK)/Sylvania(ECG)
+    等 60 多年替换品线的交叉参考重铸。
+  grade: fact
+  confidence: high
+  note: 分销商对产品性质的明确说明，与 NTE 商业模型一致
+  fetched: '2026-11-09'
+- channel: distributor_page
+  url: https://vetco.net/blogs/news/is-nte-going-out-of-business-the-current-state-of-new-tone-electronics-nte
+  claim: NTE 在运营 40 年后正式永久停业：停止回邮件、电话断线、官网下线，无任何官方预警；官方 LinkedIn 亦公告永久关闭。
+  grade: fact
+  confidence: high
+  note: 分销商 Vetco 公开说明 + 官方 LinkedIn 转述，多源一致
+  fetched: '2026-11-09'
+- channel: distributor_page
+  url: https://product.dzsc.com/news/2008-11-7/89714.html
+  claim: 中国/香港区代理为 Mobicon Holdings Ltd（香港，2008 年资料）。
+  grade: fact
+  confidence: medium
+  note: 2008 年行业黄页，时效性弱（公司已停业）
+  fetched: '2026-11-09'
+- channel: community
+  url: https://forum.digikey.com/t/horizontal-output-transistor-identification/33583/8
+  claim: DigiKey 技术论坛（2024-12 与 2026-10 帖）：NTE 已停业，DigiKey 不再销售；NTE 编号是「从信誉良好制造商重铸品牌（relabelled）」的零件。
+  grade: claim
+  confidence: medium
+  note: 论坛用户与版主转述，无官方文件
+  fetched: '2026-11-09'
+- channel: community
+  url: https://antiqueradios.com/forums/viewtopic.php?p=3789622#p3789622
+  claim: Antique Radio 论坛（2024-08）：NTE 官网自周日起下线，地区代表确认已停业；但「成千上万的 NTE 包装件仍躺在分销商货架上」。
+  grade: claim
+  confidence: medium
+  note: 爱好者论坛，多个独立帖互相印证
+  fetched: '2026-11-09'
+- channel: inference
+  url: ''
+  claim: 由其「非制造商 + 交叉参考重铸」模式推定为贸易/重铸型品牌（tier=trader），无法追溯到晶圆原厂；叠加 2024 年停业，新设计不可用。
+  grade: inference
+  confidence: high
+  note: 由上述 fact 推导，非检索所得
+  fetched: '2026-11-09'
+gaps:
+- 无公司注册机关的原始登记页（仅第三方名录）
+- 无停业的官方公告原文（仅 LinkedIn 转述与分销商说明）
+- 无中国区现货渠道的授权状态（代理资料停在 2008 年）
+- 无第三方质量/翻新件投诉统计
+- 停业后立创在售 2,300 条料号的货源自何处未确认
+conclusion: '**不推荐用于新设计（🚫 rejected）**：NTE 不是半导体制造商，而是售后替换件的重铸/贴牌分销商（交叉参考 50 万个行业器件），追溯链只能到重铸厂、到不了晶圆原厂；且公司已于
+  2024 年永久停业（官网下线、电话断线、官方 LinkedIn 公告），新品无来源保证，剩余库存仅适合维修替换。
+
+
+  **可用于**：老设备维修时按 NTE 交叉参考号找现货（库存真实存在，但批次与生产日期不可控）。
+
+
+  **替代方向**：按 NTE 号查到的原始器件型号（NTE 号本身即交叉参考）直接买原厂/授权渠道货；查不到原型号时按参数重新选型（`pick.py`），不要沿用
+  NTE 号。'
+tier_final: trader
+tier_override_reason: 非制造商、重铸/贴牌分销；且 2024 年停业 —— 机械判定给的 original_* 是关键词误命中

@@ -289,6 +289,16 @@ python whitelist.py list                                           # 看全量
 写操作同样要 `--authorized`（与 `blacklist.py` / `brand_dossier.py` 一套门禁）。
 档案落 `data/knowledge/whitelist.yaml`；方法论见 `references/brand-whitelist.md`。
 
+### 三种「不必逐品类核」的例外
+
+| 例外 | 命令 | 适用 |
+|---|---|---|
+| **免背调**（公认大厂） | `python whitelist.py preclear "TOSHIBA(东芝)" "Wurth(伍尔特)" --basis "<为什么>" --authorized "..."` | 业界公认原厂/IDM，多年在售、主流渠道常备、知识库已有分层；产品线覆盖全线，不存在需逐次核实的代工关系。写 `grade: common_knowledge` + `precleared: true` |
+| **判不推荐**（停业/假冒） | `python whitelist.py reject "NTE Electronics" --reason "2024 年停业 + 重铸贴牌" --authorized "..."` | 品牌整体判死，**优先于品类**；`pick.py` / `bom.py` 会显示 🚫 而不是静默推荐 |
+| **品牌归并**（立创拆成两条） | `python brands.py apply-aliases` | 立创同一家公司拆成多个 brand_id（如 `ADI(亚德诺)` 与 `ADI(亚德诺)/MAXIM(美信)`）；登记表 `data/knowledge/brand-aliases.yaml` 的 `merges` / `ambiguous` 由**人工复核**后写，脚本只负责应用 |
+
+免背调的判据是「**不确定就老老实实背调**」—— 免背调是省时间，不是省证据。
+
 ### 从哪开始背调：品牌队列
 
 1,296 个品牌不可能一次背完，`brand_queue.py` 按「**料号数量 × 品类广度 × 采购频次**」排优先级：
@@ -302,6 +312,7 @@ python brand_queue.py --family mosfet     # 按品类过滤
 
 分数口径：`2.0*log10(料号数+1) + 0.4*品类数 + 1.5*常用品类命中数 + 6.0*已登记待背调 - 3.0*已覆盖 - 1.0*知识库已有分层`。
 「常用品类」= 电阻/电容/电感/磁珠/LED/二极管/肖特基/TVS/ESD/MOSFET/BJT/LDO/DC-DC/MCU/晶振/连接器/EEPROM/Flash 这 18 类，作为采购频次的代理。
+状态里 `🏅 免背调` / `🚫 不推荐` / `✅ 已全部背调` 都算已处理，不会再占队列；`merge_into` 的重复条目直接跳过。
 
 **一批的做法**：`brand_queue.py --limit 8` → 逐个 `web_search` 取证（工商/官网/授权代理/商标/社区）→
 `brand_dossier.py new/add/gaps/conclusion/render` 建档案 → `whitelist.py approve` 放行 →

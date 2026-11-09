@@ -40,6 +40,9 @@
   授权代理/资料站/社区/分销页…），每条证据带**事实 / 自述 / 推论**三级标注与把握度，按证据算
   tier 分层，没查到的写进 gaps。写操作需 `--authorized`（与黑名单同一套门禁）。
   **白名单粒度是「品牌 + 物料类别」**：在连接器上核过不代表 MOSFET 也能用（见 `references/brand-whitelist.md`）。
+  三种例外：**公认大厂免背调**（`preclear`，写 `common_knowledge` 级）、**停业/假冒判不推荐**（`reject`，
+  优先于品类）、**品牌归并**（立创把同一家公司拆成两条时按 `brand-aliases.yaml` 人工复核登记）。
+  背调队列 `brand_queue.py` 按料号数 × 品类广度 × 采购频次排优先级，已处理的不再占位。
 - **判据知识库**：`data/knowledge/mosfet.yaml`（EAS 雪崩能量、SOA 校核、工艺反推的
   fact/inference 分级、9 类应用语义）+ `brands.index.yaml`（1,296 品牌全集）+ `vendors.yaml`（145 品牌 tier）。
 
@@ -62,8 +65,9 @@ scripts/distributor.py  Mouser 中国 / DigiKey 中国检索（WebBridge 登录�
 scripts/blacklist.py     品牌 / 店铺 / 料号黑名单（pick、bom、taobao 默认生效；写操作需 --authorized）
 scripts/brands.py        品牌索引（按品类枚举立创品牌 facet，1,296 品牌）
 scripts/brand_dossier.py 品牌背调档案（多渠道取证 + 事实/自述/推论三级标注 + 分层判定）
-scripts/whitelist.py     品牌白名单（按「品牌 × 品类」放行；写操作需 --authorized）
-scripts/brand_queue.py   品牌背调队列（料号数 × 品类广度 × 采购频次排优先级）
+scripts/whitelist.py     品牌白名单（按「品牌 × 品类」放行；写操作需 --authorized；含 preclear 免背调 / reject 判不推荐）
+scripts/brand_queue.py   品牌背调队列（料号数 × 品类广度 × 采购频次排优先级；已处理的不再占队列）
+scripts/brands.py        立创品牌索引（1,296 品牌全集）+ 品牌归并登记（brand-aliases.yaml → merge_into）
 data/categories.yaml  26 family 的品类 id、参数键与关键约束
 data/spec-rules.yaml  32 family 的 critical/relaxable 参数、降额基准、风险备注
 data/knowledge/       渠道、风险、降额、工作流、厂商 tier、黑名单、品牌索引、MOSFET 判据、品牌档案

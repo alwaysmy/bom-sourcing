@@ -85,6 +85,9 @@ def load_queue() -> list:
 
     rows = []
     for brand_id, info in idx.items():
+        # 归并过的条目不再是独立品牌（立创把同一家公司拆成多条），只跑主档
+        if info.get("merge_into"):
+            continue
         name = info.get("name") or str(brand_id)
         fams = list(info.get("families") or [])
         part_count = int(info.get("part_count") or 0)
@@ -97,7 +100,13 @@ def load_queue() -> list:
         wildcard = "*" in appr_fams
         covered = set(fams) if wildcard else (appr_fams & set(fams))
         uncovered = [] if wildcard else [f for f in fams if f not in appr_fams]
-        if not uncovered and fams:
+        if (wl_entry or {}).get("precleared"):
+            status = "precleared"      # 业界公认大厂，免逐次背调
+            covered, uncovered = set(fams), []
+        elif (wl_entry or {}).get("verdict") == "rejected":
+            status = "rejected"        # 已判不推荐（停业/假冒），不用再排队
+            covered, uncovered = set(fams), []
+        elif not uncovered and fams:
             status = "done"            # 本品类的全部品类都已背调
         elif pend_fams & set(fams):
             status = "pending"         # 有登记待背调
@@ -113,7 +122,7 @@ def load_queue() -> list:
                  + 0.4 * len(fams)
                  + 1.5 * common
                  + (6.0 if status == "pending" else 0.0)
-                 - (3.0 if status in ("done", "partial") else 0.0)
+                 - (3.0 if status in ("done", "partial", "precleared", "rejected") else 0.0)
                  - (1.0 if norm(name) in vendor_names else 0.0))
         rows.append({
             "brand_id": brand_id, "name": name, "part_count": part_count,
@@ -131,6 +140,8 @@ def load_queue() -> list:
 STATUS_CN = {
     "done": "✅ 已全部背调", "partial": "◐ 部分品类通过", "pending": "⏳ 待背调",
     "kb_only": "📚 仅知识库分层", "unknown": "❔ 未背调",
+    "precleared": "🏅 免背调（公认大厂）",
+    "rejected": "🚫 不推荐（停业/高风险）",
 }
 
 
@@ -168,7 +179,7 @@ def main(argv=None):
     if a.pending:
         rows = [r for r in rows if r["status"] in ("pending", "unknown", "kb_only")]
     # 默认按「先做没做的」排：待办状态优先，同状态内按分数降序
-    _order = {"pending": 0, "unknown": 1, "kb_only": 2, "partial": 3, "done": 4}
+    _order = {"pending": 0, "unknown": 1, "kb_only": 2, "partial": 3, "done": 4, "precleared": 5}
     rows = sorted(rows, key=lambda r: (_order.get(r["status"], 9), -r["score"]))
     n = len(rows) if a.all else a.limit
     print(f"品牌总数 {len(load_queue())}｜本次列出 {min(n, len(rows))}｜"
