@@ -200,6 +200,30 @@ def detect_condition(title, extra=""):
     return "未标明", []
 
 
+# 卡片上的服务标签（淘宝搜索页没有独立字段，只能从卡片文本里抓）
+_SERVICE_RULES = [
+    ("包邮", re.compile(r"包邮")),
+    ("退货宝", re.compile(r"退货宝|退货运费险")),
+    ("先鉴后发", re.compile(r"先鉴后发|先鉴定")),
+    ("对公支付", re.compile(r"对公支付|对公转账")),
+    ("企业购", re.compile(r"企业购")),
+    ("技术文档", re.compile(r"技术文档")),
+    ("当日发", re.compile(r"当日发|当天发")),
+    ("24h发", re.compile(r"24\s*小时内发")),
+    ("48h发", re.compile(r"48\s*小时内发")),
+]
+
+
+def detect_services(*texts):
+    """从卡片文本里抓服务标签（包邮/退货宝/先鉴后发/对公支付/发货时效…）。
+
+    淘宝搜索页**没有独立的包邮字段**，包邮只以文本标签出现，而且相当多链接根本不显示
+    → 「包邮筛选」只能尽力而为：一条都没标时要明确说"本页没有标包邮的链接"，不能静默清空。
+    """
+    text = " ".join(t for t in texts if t)
+    return [name for name, rx in _SERVICE_RULES if rx.search(text)]
+
+
 def daemon_start_hint():
     """daemon 没起来时给出可直接复制的启动命令（二进制不在 PATH，必须绝对路径）。"""
     exe = Path(os.environ.get("USERPROFILE") or Path.home()) / ".kimi-webbridge" / "bin" / "kimi-webbridge.exe"
@@ -515,6 +539,8 @@ def normalize(items, site):
         unit_price = round(pv / pack, 6) if (pv and pack) else None
         kind = classify_kind(title, extra)
         cond, _cond_hits = detect_condition(title, extra)
+        raw = it.get("rawText") or it.get("cardText") or ""
+        services = detect_services(title, extra, raw)
         if kind != "part":
             # 开发板/模块/混装/系列链接：单只价不成立
             unit_price, conf = None, "none"
@@ -527,6 +553,9 @@ def normalize(items, site):
             "condition_risk": COND_RISK.get(cond, "未知"),
             "condition_evidence": "卖家标题自述（未核）",
             "condition_verified": False,
+            "services": services,
+            "free_shipping": "包邮" in services,
+            "delivery": next((s for s in services if s.endswith("发") or s in ("24h发", "48h发")), None),
             "price_raw": price.get("text") or "",
             "price_value": pv,
             "price_min": price.get("min", pv),
@@ -562,6 +591,33 @@ def sort_items(items, sort):
         real.sort(key=lambda x: (x["price_value"] is None, x["price_value"] or 0),
                   reverse=(sort == "price_desc"))
     return real, ads
+
+
+def filter_items(items, price_min=None, price_max=None, free_shipping=False):
+    """价格区间 / 包邮筛选。返回 (kept, dropped)，dropped 里带原因。
+
+    价格用**标价**（`price_value`）而不是单只价：大量链接的包装数量不可知，
+    用单只价筛选会把没标数量的真链接误杀。单只价的可靠性由 `comparable` 字段单独表达。
+    """
+    kept, dropped = [], []
+    for x in items:
+        p = x.get("price_value")
+        if price_min is not None or price_max is not None:
+            if p is None:
+                dropped.append((x, "标价缺失，无法按价格区间筛"))
+                continue
+            if price_min is not None and p < price_min:
+                dropped.append((x, f"标价 {money(p)} < 下限 {money(price_min)}"))
+                continue
+            if price_max is not None and p > price_max:
+                dropped.append((x, f"标价 {money(p)} > 上限 {money(price_max)}"))
+                continue
+        if free_shipping:
+            if "包邮" not in (x.get("services") or []):
+                dropped.append((x, "未标包邮"))
+                continue
+        kept.append(x)
+    return kept, dropped
 
 
 # --------------------------------------------------------------------------- 渲染
@@ -629,6 +685,16 @@ def render_md(res, site, keyword, sort, limit, elapsed, show_all=False):
     if res.get("client_sorted"):
         print(f"- 注意：价格排序由客户端完成，只覆盖本页 {len(res['sorted']) + len(ads)} 条，"
               f"不代表全网最低价；要更低价需翻页或改关键词。")
+    if sort in ("price_asc", "price_desc"):
+        print("- 注意：淘宝大量「乱标价」（低价引流、区间价、按包计价），价格排序不可靠 —— "
+              "建议用默认排序（`--sort default`）多取几条，再用 `--price-min/--price-max` 卡区间。")
+    if res.get("free_ship_note"):
+        print(f"- 注意：{res['free_ship_note']}")
+    if res.get("filtered_out"):
+        fo = res["filtered_out"]
+        print(f"- 已按筛选条件剔除 {len(fo)} 条（价格区间/包邮）："
+              + "、".join(f"{cut(x.get('title'), 18)}（{why}）" for x, why in fo[:3])
+              + ("…" if len(fo) > 3 else ""))
     if page.get("loginWall"):
         print("- 注意：页面有登录提示，抽取结果可能不完整")
     if site == "taobao":
@@ -732,6 +798,13 @@ def cmd_check(a):
         print(f"  探测失败：{e}")
         code = e.exit_code
 
+    print("\n依赖关系（不是「只要淘宝登录过就行」）：")
+    print("  - 脚本本身不存淘宝 cookie，也不做扫码登录；它驱动的是**本机这台浏览器**")
+    print(f"    （当前由 Kimi 扩展接管的那个 profile，daemon {DAEMON}）。")
+    print("  - 所以需要同时满足三件事：① 本机 daemon 在跑；② 该浏览器装了 Kimi 扩展并连上；")
+    print("    ③ **这个浏览器**里淘宝是登录态。换浏览器/换机器/清 cookie 都要重新配。")
+    print("  - 换端口：KIMI_WEBBRIDGE_URL=http://127.0.0.1:<port> 后再跑本命令。")
+
     print("\n1688：免登录可检索（销量排序走 URL 参数）。")
     print(f"\n总结：{'OK' if code == 0 else '需要处理'} — "
           f"可用命令 `python scripts/taobao.py search \"<关键词>\" --site taobao|1688 --sort sales`")
@@ -757,13 +830,32 @@ def cmd_search(a):
         return e.exit_code
 
     real, ads = sort_items(normalize(res["items"], a.site), a.sort)
+    # 价格区间 / 包邮筛选（用户可加；价格用标价，理由见 filter_items docstring）
+    dropped_filter = []
+    free_ship_note = ""
+    if a.free_shipping and not any(x.get("free_shipping") for x in real):
+        # 本页没有任何链接标「包邮」：淘宝搜索页大量链接不显示这个标签，直接筛等于清空
+        free_ship_note = ("本页没有链接标「包邮」（淘宝搜索页多数卡片不显示包邮标识）——"
+                          "包邮筛选已跳过；要看包邮请进详情页或换关键词")
+        a.free_shipping = False
+    if a.price_min is not None or a.price_max is not None or a.free_shipping:
+        real, dropped_filter = filter_items(real, a.price_min, a.price_max, a.free_shipping)
     res["sorted"], res["ads"] = real, ads
+    res["filtered_out"] = dropped_filter
+    if free_ship_note:
+        res["free_ship_note"] = free_ship_note
     # 价格排序是客户端排序（页面「价格」tab 点击实测不生效）
     if a.sort in ("price_asc", "price_desc"):
         res["client_sorted"] = True
     res["elapsed"] = time.time() - t0
 
     if not real:
+        if dropped_filter:
+            print(f"[失败] 筛选条件把 {len(dropped_filter)} 条全部剔除了（不是登录态问题）。")
+            for x, why in dropped_filter[:5]:
+                print(f"  - {cut(x.get('title'), 30)}：{why}")
+            print("[提示] 放宽 --price-min/--price-max 或去掉 --free-shipping。")
+            return EXIT_EMPTY
         print("[失败] 结果里没有可用的商品条目", file=sys.stderr)
         if a.site == "taobao":
             print("[提示] 多半是淘宝登录态过期，先在浏览器登录淘宝。", file=sys.stderr)
@@ -799,6 +891,12 @@ def main(argv=None):
     s.add_argument("--no-fallback", action="store_true", help="playbook 抽取为空时不回退自写 DOM 抽取")
     s.add_argument("--all", action="store_true",
                    help="连开发板/成品模块/混装包/系列链接一起显示（默认只显示可比元器件）")
+    s.add_argument("--price-min", type=float, default=None, metavar="Y",
+                   help="只要标价 ≥ Y 元（按标价筛，不是单只价）")
+    s.add_argument("--price-max", type=float, default=None, metavar="Y",
+                   help="只要标价 ≤ Y 元（按标价筛，不是单只价）")
+    s.add_argument("--free-shipping", dest="free_shipping", action="store_true",
+                   help="只保留标了「包邮」的链接")
     s.set_defaults(func=cmd_search)
 
     a = ap.parse_args(argv)

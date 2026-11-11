@@ -318,19 +318,25 @@ def moq_cost(rec, qty):
     return buy, round(unit * buy, 2), unit
 
 
-def channel_advice(line, rec, qty):
+def channel_advice(line, rec, qty, production=False):
     fam = _family(line, rec)
     if fam in ("connector", "switch") or re.search(r"模块|开发板|成品", line.get("mpn", "")):
-        return "淘宝优先", "成品/模块类淘宝型号多、单价低；立创多卖芯片"
+        if production:
+            return "立创优先（量产口径）", "成品/模块淘宝型号多，但量产要可追溯与批次一致性，立创自营更稳"
+        return "淘宝优先", "成品/模块类淘宝型号多、单价低；立创多卖芯片（淘宝可买拆机/散新，注意标注成色）"
     if fam in ("mcu", "ldo", "dcdc", "flash", "crystal", "opamp"):
         if qty <= 5:
+            if production:
+                return "立创优先", "核心器件 + 量产/高可靠：淘宝只认全新原装；拆机/散新/翻新不可用"
             return "立创优先", "核心器件事关可靠性，立创自营可追溯（淘宝同型号存在翻新/散新）"
         return "立创批量", "核心器件批量走立创阶梯价，交期与批次可预期"
     if qty <= 10:
-        return "淘宝优先", "少量阻容淘宝散卖包邮更省（立创有最低运费与起订约束）"
+        if production:
+            return "立创 / 淘宝比价（仅全新）", "量产口径：淘宝只比全新原装，拆机/散新/翻新一律不参与"
+        return "淘宝优先", "少量阻容淘宝散卖包邮更省（立创有最低运费与起订约束；拆机/散新可用但要标注）"
     if qty <= 100:
-        return "立创 / 淘宝比价", "小批量两边都比：立创正品有票，淘宝可能更便宜"
-    return "立创批量 / 1688", "批量走阶梯价，1688 批发更优；淘宝仅作替代料来源"
+        return "立创 / 淘宝比价", "小批量两边都比：立创正品有票，淘宝可能更便宜（成色要标注）"
+    return "立创批量 / 1688", "批量走阶梯价，1688 批发更优；淘宝仅作替代料来源（电子元件默认不查 1688）"
 
 
 # --------------------------------------------------------------------------- 替代
@@ -379,9 +385,12 @@ def collect_alternates(cli: Lcsc, lines, results, limit=3, sleep=0.6):
 # --------------------------------------------------------------------------- 渲染
 def render(lines, results, args, alts=None):
     alts = alts or {}
+    production = bool(getattr(args, "production", False))
     out = [f"# BOM 配单报价单\n",
            f"- BOM: `{args.bom}`",
            f"- 选型倾向: {args.pref}　备料: {'按损耗模型' if args.spares else '不加备料'}",
+           f"- 采购口径: **{'量产 / 高可靠' if production else '打样 / 小批量'}**"
+           f"（{('淘宝只认全新原装，拆机/散新/翻新不参与比价' if production else '拆机/散新可用，采购时标注成色即可')}）",
            f"- 数据源: 立创商城（含税单价，按数量取阶梯价）",
            f"- 生成: {__import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M')}\n",
            "| 行 | 需求 | 数量 | 采购量 | 推荐C号 | 实际型号 | 品牌 | 封装 | 单价 | 小计 | 指标核对 | 把握 | 渠道 | 备注 |",
@@ -401,7 +410,7 @@ def render(lines, results, args, alts=None):
             need_confirm += 1
         mark = {"exact": "✔", "param": "✔", "close": "≈", "param_warn": "!", "param_guess": "?",
                 "none": "✘", "error": "!"}.get(conf, "?")
-        ch, _ = channel_advice(line, rec, oq)
+        ch, _ = channel_advice(line, rec, oq, production)
         cells = [str(line["line"]), line["mpn"], str(line["qty"]), str(buy or oq),
                  rec["code"] if rec else "—", rec["model"] if rec else "未匹配",
                  (rec.get("brand") or "") if rec else "", (rec.get("package") or "") if rec else "",
@@ -415,7 +424,7 @@ def render(lines, results, args, alts=None):
     out.append(f"- 行数 {len(lines)}｜未匹配 {unresolved}｜需人工确认 {need_confirm}")
     out.append(f"- 立创合计（含起订量与备料）: **¥{total:.2f}**")
     qty_all = sum(order_qty(l, r.get("chosen")) if args.spares else l["qty"] for l, r in zip(lines, results))
-    ch, why = channel_advice({"mpn": "", "description": ""}, None, qty_all)
+    ch, why = channel_advice({"mpn": "", "description": ""}, None, qty_all, production)
     out.append(f"- 整体渠道建议（{qty_all} 件）: **{ch}** —— {why}")
     out.append("")
     out.append("")
@@ -504,6 +513,8 @@ def main(argv=None):
     ap.add_argument("--spares", dest="spares", action="store_true", default=True, help="按损耗模型加备料")
     ap.add_argument("--no-spares", dest="spares", action="store_false")
     ap.add_argument("--no-cache", action="store_true")
+    ap.add_argument("--production", action="store_true",
+                    help="按量产/高可靠口径给渠道建议：淘宝只认全新原装，拆机/散新/翻新不参与比价")
     a = ap.parse_args(argv)
 
     path = Path(a.bom)

@@ -942,14 +942,16 @@ def _shop_type(shop, badges=None):
 
 
 def _shipping_note(x):
-    """运费提示：只能从标题/店铺标里读到"包邮"，其余按淘宝零售运费给保守区间。"""
-    t = (x.get("title") or "") + "".join(x.get("shop_badges") or [])
-    if "包邮" in t:
+    """运费提示：优先用卡片上的服务标签（包邮/发货时效），拿不到再按价格给保守区间。"""
+    services = x.get("services") or []
+    if "包邮" in services:
         return "包邮"
+    delivery = x.get("delivery")
+    tail = f"（{delivery}）" if delivery else ""
     p = x.get("price_value") or 0
     if p and p < 1:
-        return "运费另计（≈¥8-12，单价低于运费建议凑单）"
-    return "运费另计（≈¥8-12）"
+        return f"运费另计（≈¥8-12，单价低于运费建议凑单）{tail}"
+    return f"运费另计（≈¥8-12）{tail}"
 
 
 def sample_info(x):
@@ -1068,7 +1070,9 @@ def market_compare(picked, args, n=None, text=""):
     if n <= 0:
         return
     production = _needs_production(args, text)
-    print(f"\n## 渠道比价（{site}，按销量取样 {n} 个型号；{site_name}需浏览器已登录）")
+    print(f"\n## 渠道比价（{site}，默认排序取样 {n} 个型号；{site_name}需浏览器已登录）")
+    if site == "1688":
+        print("  · 1688 只在显式 --market 1688 时查询；电子元件默认不查（默认走淘宝 + 立创）")
     if production:
         print("  口径：**量产/高可靠** —— 翻新/拆机/散新不参与比价（只看全新原装/未标明）")
     else:
@@ -1086,14 +1090,30 @@ def market_compare(picked, args, n=None, text=""):
         try:
             tb.throttle(site)
             if site == "1688":
-                res = tb.search_1688(br, model, "sales", 5)
+                res = tb.search_1688(br, model, "sales", 10)
             else:
-                res = tb.search_taobao(br, model, "sales", 5, 0)
+                # 淘宝「价格排序」没有意义（大量乱标价：低价引流/区间价/按包计价），
+                # 改用默认（综合）排序多取几条，再按价格区间/包邮在本地筛。
+                res = tb.search_taobao(br, model, "default", 10, 0)
             items = [x for x in tb.normalize(res["items"], site) if not x.get("sponsored")]
         except Exception as e:  # noqa: BLE001
             rows.append([model[:24], money(lc) if lc else "?", "—", f"取数失败: {str(e)[:24]}",
                          "—", "—", "—", "—", "—"])
             continue
+        # 价格区间 / 包邮：与 taobao.py 同一套口径（价格用标价，不用单只价）
+        fs = getattr(args, "taobao_free_shipping", False)
+        pmin = getattr(args, "taobao_price_min", None)
+        pmax = getattr(args, "taobao_price_max", None)
+        if pmin is not None or pmax is not None or fs:
+            if fs and not any(x.get("free_shipping") for x in items):
+                print(f"  · {model}: 本页没有标「包邮」的链接，包邮筛选已跳过")
+                fs = False
+            items, _fdrop = tb.filter_items(items, pmin, pmax, fs)
+            if not items:
+                rows.append([model[:24], money(lc) if lc else "?", "—",
+                             "价格区间/包邮筛选后无结果", "—", "—", "—", "—", "—"])
+                concl.append(f"{model}: {site_name} 结果被价格区间/包邮筛选全部排除（放宽条件再试）")
+                continue
         _dump_market_raw(args, model, site, items, {
             "url": res.get("url"), "sort_applied": res.get("sort_applied"),
             "total": res.get("total"), "used_fallback": res.get("used_fallback"),
@@ -1503,6 +1523,12 @@ def main(argv=None):
     p.add_argument("--taobao-json", dest="taobao_json", metavar="DIR",
                    help="把淘宝/1688 原始结果按型号+时间戳落盘到 DIR")
     p.add_argument("--market", default="taobao", choices=["taobao", "1688"])
+    p.add_argument("--taobao-price-min", dest="taobao_price_min", type=float, default=None, metavar="Y",
+                   help="淘宝比价只看标价 ≥ Y 元（按标价，不是单只价）")
+    p.add_argument("--taobao-price-max", dest="taobao_price_max", type=float, default=None, metavar="Y",
+                   help="淘宝比价只看标价 ≤ Y 元")
+    p.add_argument("--taobao-free-shipping", dest="taobao_free_shipping", action="store_true",
+                   help="淘宝比价只看标了「包邮」的链接（本页没标就自动跳过并说明）")
     p.add_argument("--production", action="store_true",
                    help="按量产/高可靠口径比价：翻新/拆机/散新不参与比价（句子里写"
                         "「量产/车规/高可靠」等词等同于加这个开关；没说时只标注成色）")

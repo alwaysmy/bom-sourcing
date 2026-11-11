@@ -34,7 +34,8 @@
       itemId: id, title: txt('[class*="title--"]').slice(0, 60), priceText: pr, priceNum, salesText: sv, salesNum,
       shop, badges, loc, sponsored: /m?click\.simba\.taobao\.com/.test(href || ''),
       url: 'https://item.taobao.com/item.htm?id=' + id,
-      abs: (card.querySelector('[class*="abstractInnerWrapper--"]') ? clean(card.querySelector('[class*="abstractInnerWrapper--"]').textContent) : '').slice(0, 120)
+      abs: (card.querySelector('[class*="abstractInnerWrapper--"]') ? clean(card.querySelector('[class*="abstractInnerWrapper--"]').textContent) : '').slice(0, 120),
+      rawText: clean(card.textContent).slice(0, 1500)
     });
   }
   const sortTabs = [...document.querySelectorAll('a, li, span')].filter(e => /^(综合|销量|价格)$/.test(clean(e.textContent)) && e.textContent.trim().length <= 3).slice(0, 12).map(e => ({ tag: e.tagName, cls: e.className, href: e.getAttribute('href') || null, text: clean(e.textContent), parentCls: e.parentElement ? e.parentElement.className : null }));
