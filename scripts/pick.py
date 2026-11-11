@@ -887,6 +887,8 @@ def _looks_series(title):
 def _market_usable(x):
     """淘宝/1688 里"混装包/套装/开发板"的单只价没有可比性，先剔掉；conf=low 的也不要用。"""
     title = x.get("title") or ""
+    if x.get("kind") and x.get("kind") != "part":
+        return False
     if _ASSORT_RE.search(title):
         return False
     if _DEVBOARD_RE.search(title):
@@ -896,6 +898,33 @@ def _market_usable(x):
     if str(x.get("unit_confidence") or "").lower() == "low":
         return False
     return True
+
+
+# 量产 / 高可靠场景：这三类成色直接从比价里剔除（用户口径：没提要求就只标注）
+_PROD_RE = re.compile(
+    r"量产|批产|批量生产|批量交付|量产件|车规|AEC[- ]?Q|工业级|医疗级|军品|高可靠|高可靠性"
+    r"|不要拆机|不要翻新|不能翻新|禁止拆机|全新原装", re.I)
+_BAD_COND = ("翻新", "拆机", "散新")
+
+
+def _needs_production(args, text=""):
+    """要不要按「量产/高可靠」口径收紧：显式开关或句子里说了算。"""
+    return bool(getattr(args, "production", False) or _PROD_RE.search(text or ""))
+
+
+def _cond_cell(x, lc_price=None, production=False, up=None):
+    """成色单元格：标注 + 价差异常提示（原装是卖家自述，不能当证据）。"""
+    cond = x.get("condition") or "未标明"
+    up = up if up is not None else x.get("unit_price")
+    notes = []
+    if cond in _BAD_COND:
+        notes.append("打样/维修可用" if not production else "量产不可用")
+    if cond in ("原装", "全新"):
+        notes.append("自述")
+    # 价格低到不合常理（< 立创 40%）时，成色自述基本不可信
+    if lc_price and up and up < lc_price * 0.4:
+        notes.append(f"价差异常（立创的 {up / lc_price:.2f}×，可能非全新原厂）")
+    return cond + (f"（{'，'.join(notes)}）" if notes else "")
 
 
 def _shop_type(shop, badges=None):
@@ -974,6 +1003,8 @@ def sample_info(x):
     out["sample_ok"] = True
     out["assumed"] = True
     out["sample_text"] = "✓ 可买 1 只"
+    # 标题没写包装数量 → "单只价"只是按 1 只的假设，不能当比价结论用（必须标不可比）
+    out["comparable"] = False
     return out
 
 
@@ -1024,7 +1055,7 @@ def _ratio_text(tb_price, lc_price, site_name="淘宝"):
     return f"{site_name}省 {save * 100:.0f}%"
 
 
-def market_compare(picked, args, n=None):
+def market_compare(picked, args, n=None, text=""):
     """拿 pick 出来的型号去淘宝/1688 摸零售单只价 + 样品可得性，判断渠道。"""
     try:
         import taobao as tb  # noqa: PLC0415
@@ -1036,8 +1067,13 @@ def market_compare(picked, args, n=None):
     n = min(n if n is not None else (args.taobao or 0), len(picked))
     if n <= 0:
         return
+    production = _needs_production(args, text)
     print(f"\n## 渠道比价（{site}，按销量取样 {n} 个型号；{site_name}需浏览器已登录）")
-    header = ["型号", "立创单只", f"{site}单只", "对比", "包装/起订", "样品", "运费", "店铺类型"]
+    if production:
+        print("  口径：**量产/高可靠** —— 翻新/拆机/散新不参与比价（只看全新原装/未标明）")
+    else:
+        print("  口径：打样/小批量 —— 翻新/拆机/散新**可用**，只标注成色，不剔除")
+    header = ["型号", "立创单只", f"{site}单只", "对比", "成色", "包装/起订", "样品", "运费", "店铺类型"]
     rows, concl = [], []
     try:
         br = tb.Bridge()
@@ -1056,7 +1092,7 @@ def market_compare(picked, args, n=None):
             items = [x for x in tb.normalize(res["items"], site) if not x.get("sponsored")]
         except Exception as e:  # noqa: BLE001
             rows.append([model[:24], money(lc) if lc else "?", "—", f"取数失败: {str(e)[:24]}",
-                         "—", "—", "—", "—"])
+                         "—", "—", "—", "—", "—"])
             continue
         _dump_market_raw(args, model, site, items, {
             "url": res.get("url"), "sort_applied": res.get("sort_applied"),
@@ -1072,14 +1108,27 @@ def market_compare(picked, args, n=None):
                 print(f"  ⛔ 黑名单店铺已排除：{model} @ {x['shop']}（{money(x.get('unit_price'))}/只）—— {why}")
             infos = [(x, i) for x, i in infos if not x.get("shop_blacklisted")]
         with_price = [(x, i) for x, i in infos if i.get("unit_price")]
+        if production:
+            keep = [(x, i) for x, i in with_price if (x.get("condition") or "未标明") not in _BAD_COND]
+            dropped_cond = [(x, i) for x, i in with_price if (x.get("condition") or "未标明") in _BAD_COND]
+            if dropped_cond:
+                print(f"  ⛔ 量产口径已排除 {len(dropped_cond)} 条非全新："
+                      + "、".join(f"{x.get('condition')} {money(i['unit_price'])}" for x, i in dropped_cond[:3]))
+            with_price = keep
         if with_price:
             x, i = min(with_price, key=lambda xi: xi[1]["unit_price"])
             lc_s = money(lc) if lc else "?"
+            comparable = i.get("comparable", True)
             rows.append([model[:24], lc_s, money(i["unit_price"]),
-                         _ratio_text(i["unit_price"], lc, site_name),
+                         _ratio_text(i["unit_price"], lc, site_name) if comparable
+                         else "**不可比**（标题未标包装，按 1 只估）",
+                         _cond_cell(x, lc, production, up=i["unit_price"]),
                          i["pack_text"], i["sample_text"], i["shipping_note"], i["shop_type"]])
-            start = f"{i['pack']} 只起" if i.get("pack") else "标题未标数量"
-            if i.get("sample_ok"):
+            start = f"{i['pack']} 只起" if i.get("pack") and not i.get("assumed") else "标题未标数量"
+            if not comparable:
+                small_note = (f"标题没写一包多少只，单只价只是按 1 只估 —— **不可比**；"
+                              f"要打样先问卖家一包几只（立创 {money(lc) if lc else '?'}/只有据可依）")
+            elif i.get("sample_ok"):
                 small = (f"{site_name}打样" if (lc and i["unit_price"] < lc)
                          else f"立创（{site_name}没更便宜）")
                 small_note = f"少量（≤{SAMPLE_OK_LIMIT}）建议{small}"
@@ -1091,11 +1140,17 @@ def market_compare(picked, args, n=None):
         elif infos:
             x, i = infos[0]
             rows.append([model[:24], money(lc) if lc else "?", "—", "无单只价",
+                         _cond_cell(x, lc, production),
                          i["pack_text"], i["sample_text"], i["shipping_note"], i["shop_type"]])
             concl.append(f"{model}: {site_name} {len(infos)} 条可用结果都没有单只价（{i['note'][:28]}）——"
                          f"立创 {money(lc) if lc else '?'}/只 更靠谱，{site_name}只作打样渠道")
+        elif production and [x for x in items if _market_usable(x)]:
+            rows.append([model[:24], money(lc) if lc else "?", "—",
+                         "量产口径下无可比价结果", "—", "—", "—", "—", "—"])
+            concl.append(f"{model}: {site_name} 有结果但都是翻新/拆机/散新 —— 量产/高可靠场景不可用，"
+                         f"走立创 {money(lc) if lc else '?'}/只 或原厂代理")
         else:
-            rows.append([model[:24], money(lc) if lc else "?", "—", "无可用结果", "—", "—", "—", "—"])
+            rows.append([model[:24], money(lc) if lc else "?", "—", "无可用结果", "—", "—", "—", "—", "—"])
             concl.append(f"{model}: {site_name}无可用结果（{len(items)} 条原始命中，均被混装/开发板规则剔除）")
     widths = [max(cwidth(h), *(cwidth(row[i]) for row in rows)) for i, h in enumerate(header)]
     print("  " + "  ".join(pad(h, widths[i]) for i, h in enumerate(header)))
@@ -1331,7 +1386,7 @@ def cmd_pick(args):
         verified = verify_candidates(cli, picked, args.verify, args.qty, info, cat.get("family"))
     n_cmp = taobao_plan(args)
     if picked and n_cmp:
-        market_compare(picked, args, n_cmp)
+        market_compare(picked, args, n_cmp, text=text)
     elif picked and args.qty > BATCH_QTY and not getattr(args, "no_taobao", False):
         print(f"渠道: 批量（{args.qty} 只 > {BATCH_QTY}）默认不查淘宝 —— 走 1688 询盘/原厂代理；"
               "要零售比价可加 --taobao N。")
@@ -1448,6 +1503,9 @@ def main(argv=None):
     p.add_argument("--taobao-json", dest="taobao_json", metavar="DIR",
                    help="把淘宝/1688 原始结果按型号+时间戳落盘到 DIR")
     p.add_argument("--market", default="taobao", choices=["taobao", "1688"])
+    p.add_argument("--production", action="store_true",
+                   help="按量产/高可靠口径比价：翻新/拆机/散新不参与比价（句子里写"
+                        "「量产/车规/高可靠」等词等同于加这个开关；没说时只标注成色）")
     p.add_argument("--debug", action="store_true")
     p.set_defaults(func=cmd_pick)
 

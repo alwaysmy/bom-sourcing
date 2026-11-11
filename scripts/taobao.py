@@ -124,6 +124,92 @@ def detect_unit(title, extra="", price=None):
     return None, "", "none"
 
 
+# --------------------------------------------------------------------- 品类与非料件
+# 这些标题不是「一颗/一只可比的元器件」：开发板、成品模块、混装包、系列链接。
+# 单只价对它们不成立，直接参与比价会把结论带偏（实测：STM32 搜索前 8 条里 5 条是开发板）。
+_DEVBOARD_RE = re.compile(
+    r"开发板|核心板|最小系统|学习板|实验板|评估板|demo\s*板|系统板|单片机板|转接板|底板|扩展板",
+    re.I)
+_MODULE_RE = re.compile(
+    r"电源模块|降压模块|升压模块|稳压模块|转接座|转接头|适配器|模块板|传感器模块|继电器模块",
+    re.I)
+# 一条链接挂多个阻值/容值（"1k 2k 4.7k 10k …"）→ 价格是起价，不能当单只价
+_RC_VAL_RE = re.compile(
+    r"(?<![A-Za-z0-9.])\d+(?:\.\d+)?\s*(?:[RrKkMm]\d*|Ω|欧|[uUnNpP]F)(?![A-Za-z0-9])")
+_GLUED_VAL_RE = re.compile(r"\d+(?:\.\d+)?[kKmMrR](?![A-Za-z])")
+_GLUED_CAP_RE = re.compile(r"\d+(?:\.\d+)?\s*[UuNnPp](?=[\d.])")
+
+
+def detect_series(title):
+    """标题像「一条链接挂多个型号/阻值/容值」→ True（价格是起价，不能折算单只）。"""
+    if "系列" in (title or ""):
+        return True
+    n = (len(_RC_VAL_RE.findall(title or ""))
+         + len(_GLUED_VAL_RE.findall(title or ""))
+         + len(_GLUED_CAP_RE.findall(title or "")))
+    return n >= 2
+
+
+def classify_kind(title, extra=""):
+    """判定条目类型：devboard / module / assortment / series / part（真正可比的元器件）。
+
+    只有 `part` 才允许参与「单只价」比较；其余一律标注后剔除（`--all` 可显示）。
+    """
+    text = f"{title or ''} {extra or ''}"
+    if detect_assortment(title, extra):
+        return "assortment"
+    if _DEVBOARD_RE.search(text):
+        return "devboard"
+    if _MODULE_RE.search(text):
+        return "module"
+    if detect_series(text):
+        return "series"
+    return "part"
+
+
+KIND_CN = {"part": "元器件", "devboard": "开发板", "module": "成品模块",
+           "assortment": "混装包", "series": "系列链接"}
+
+# --------------------------------------------------------------------- 成色（真伪风险）
+# 口径（用户 2026-11-11 定）：**没要求量产/高可靠时，拆机件可用，只标注**；
+# 一旦用户提了量产/车规/高可靠，才据此剔除。
+_COND_RULES = [
+    ("翻新", re.compile(r"翻新|打磨|抛光|重打字|改标|洗标|重新打码", re.I)),
+    ("拆机", re.compile(r"拆机|拆板|二手|回收|议价|旧件|拆件", re.I)),
+    ("散新", re.compile(r"散新|散装新|库存散", re.I)),
+    ("国产替代", re.compile(r"国产替代|国产|兼容|可代替|代用|替换型", re.I)),
+    ("原装", re.compile(r"原装|正品原装|全新原装|进口原装|原厂", re.I)),
+    ("全新", re.compile(r"全新|新品|新货", re.I)),
+]
+COND_RISK = {"翻新": "高", "拆机": "中", "散新": "中", "国产替代": "中", "原装": "低", "全新": "低",
+             "未标明": "未知"}
+# 量产/高可靠场景下拒绝的成色（拆机/散新/翻新都不行；国产替代要看具体件，先保留但提示）
+COND_REJECT_IN_PRODUCTION = ("翻新", "拆机", "散新")
+
+
+def detect_condition(title, extra=""):
+    """从标题推断成色：翻新 > 拆机 > 散新 > 国产替代 > 原装 > 全新 > 未标明。
+
+    卖家标题里的「原装正品」只是自述（claim），不能当证据；这里只做**标注**，
+    除非用户明确要求量产/高可靠，否则不改动价格比较的结果。
+    """
+    text = f"{title or ''} {extra or ''}"
+    for tag, rx in _COND_RULES:
+        if rx.search(text):
+            return tag, [tag]
+    return "未标明", []
+
+
+def daemon_start_hint():
+    """daemon 没起来时给出可直接复制的启动命令（二进制不在 PATH，必须绝对路径）。"""
+    exe = Path(os.environ.get("USERPROFILE") or Path.home()) / ".kimi-webbridge" / "bin" / "kimi-webbridge.exe"
+    if not exe.exists():
+        exe = Path.home() / ".kimi-webbridge" / "bin" / "kimi-webbridge"
+    return (f"daemon 没在跑。启动（幂等，已启动就 no-op）：\n"
+            f"  & \"{exe}\" start\n"
+            f"  然后确认：& \"{exe}\" status   # extension_connected 要为 true")
+
+
 # --------------------------------------------------------------------------- WebBridge
 class BridgeError(RuntimeError):
     def __init__(self, message, exit_code=EXIT_DAEMON, hint=""):
@@ -427,8 +513,20 @@ def normalize(items, site):
         else:
             pack, note, conf = detect_unit(title, extra, pv)
         unit_price = round(pv / pack, 6) if (pv and pack) else None
+        kind = classify_kind(title, extra)
+        cond, _cond_hits = detect_condition(title, extra)
+        if kind != "part":
+            # 开发板/模块/混装/系列链接：单只价不成立
+            unit_price, conf = None, "none"
+            note = f"{KIND_CN.get(kind, kind)}（不参与单只价比较）"
         out.append({
             "title": title,
+            "kind": kind,
+            "kind_cn": KIND_CN.get(kind, kind),
+            "condition": cond,
+            "condition_risk": COND_RISK.get(cond, "未知"),
+            "condition_evidence": "卖家标题自述（未核）",
+            "condition_verified": False,
             "price_raw": price.get("text") or "",
             "price_value": pv,
             "price_min": price.get("min", pv),
@@ -467,15 +565,19 @@ def sort_items(items, sort):
 
 
 # --------------------------------------------------------------------------- 渲染
-def render_md(res, site, keyword, sort, limit, elapsed):
-    items = res["sorted"][:limit]
+def render_md(res, site, keyword, sort, limit, elapsed, show_all=False):
+    all_sorted = res["sorted"]
+    # 默认只显示「真正可比的元器件」；开发板/成品模块/混装包/系列链接单列统计后剔除
+    parts = [x for x in all_sorted if x.get("kind", "part") == "part"]
+    others = [x for x in all_sorted if x.get("kind", "part") != "part"]
+    items = (all_sorted if show_all else parts)[:limit]
     ads = res["ads"]
     page = res["page"] or {}
     site_name = SITES[site]["name"]
     print(f"## {site_name} · {keyword}")
     print()
-    print("| # | 标题 | 价格 | 单只价 | 销量 | 店铺 | 链接 |")
-    print("|---|------|------|--------|------|------|------|")
+    print("| # | 标题 | 价格 | 单只价 | 成色 | 销量 | 店铺 | 链接 |")
+    print("|---|------|------|--------|------|------|------|------|")
     for i, x in enumerate(items, 1):
         price = money(x["price_value"])
         if x["price_max"] and x["price_max"] != x["price_value"]:
@@ -483,15 +585,19 @@ def render_md(res, site, keyword, sort, limit, elapsed):
         if x["price_qualifier"]:
             price += f"（{x['price_qualifier']}）"
         unit = money(x["unit_price"]) + f"/只（{x['unit_note']}）" if x["unit_price"] else "—"
-        if x.get("assortment"):
-            unit = "混装包"
+        if x.get("kind", "part") != "part":
+            unit = x.get("kind_cn") or "非料件"
         elif not x["unit_price"] and (x["unit_note"] or "").startswith("数量区间"):
             unit = "区间价"
+        cond = x.get("condition") or "未标明"
+        risk = x.get("condition_risk") or "未知"
+        cond_cell = cond if risk == "低" and cond != "未标明" else f"{cond}({risk})"
         sales = x["sales_text"] or ("月销/回头率 " + str(x["repeat_rate"]) + "%" if x["repeat_rate"] else "—")
         shop = cut(x["shop"], 18) or "—"
         if x.get("shop_blacklisted"):
             shop = "⛔" + shop
-        print(f"| {i} | {cut(x['title'], 46).replace('|', '/')} | {price} | {unit} | {sales} | {shop} | {x['url']} |")
+        print(f"| {i} | {cut(x['title'], 46).replace('|', '/')} | {price} | {unit} | {cond_cell} | "
+              f"{sales} | {shop} | {x['url']} |")
     bl = [(i, x) for i, x in enumerate(items, 1) if x.get("shop_blacklisted")]
     if bl:
         print()
@@ -534,8 +640,26 @@ def render_md(res, site, keyword, sort, limit, elapsed):
     conf_low = [x for x in items if x["pack_qty"] and x["unit_confidence"] == "low"]
     if conf_low:
         print(f"- 注意：{len(conf_low)} 条的单只价来自标题小数量（<10），可能是一份多只，也可能是散卖。")
+    if others and not show_all:
+        by_kind = {}
+        for x in others:
+            by_kind[x.get("kind_cn") or x.get("kind")] = by_kind.get(x.get("kind_cn") or x.get("kind"), 0) + 1
+        detail = "、".join(f"{k} {v}" for k, v in by_kind.items())
+        print(f"- 已剔除 {len(others)} 条非料件（{detail}）—— 它们的价格不能折算单只价，"
+              "要看全量加 `--all`。")
+    conds = {}
+    for x in items:
+        c = x.get("condition") or "未标明"
+        conds[c] = conds.get(c, 0) + 1
+    if conds:
+        detail = "、".join(f"{k} {v}" for k, v in sorted(conds.items(), key=lambda kv: -kv[1]))
+        print(f"- 成色分布（卖家标题自述，未核实）：{detail}")
+        risky = [x for x in items if x.get("condition") in ("翻新", "拆机", "散新")]
+        if risky:
+            print(f"- 其中 {len(risky)} 条是翻新/拆机/散新：**打样与维修可用（默认只标注）**；"
+                  "量产/车规/高可靠场景必须排除这类卖家（本工具在 --production 下自动剔除）。")
     assort = [x for x in res["sorted"] if x.get("assortment")]
-    if assort:
+    if assort and show_all:
         print(f"- 注意：{len(assort)} 条是混装/套装（不同型号打包），已标「混装包」且不做单只价归一。")
     ranged = [x for x in res["sorted"] if (x["unit_note"] or "").startswith("数量区间")]
     if ranged:
@@ -567,7 +691,10 @@ def cmd_check(a):
         st = br.status()
     except BridgeError as e:
         print(f"daemon: FAIL — {e}")
-        print(f"hint: {e.hint}")
+        if e.hint:
+            print(f"hint: {e.hint}")
+        print()
+        print(daemon_start_hint())
         return e.exit_code
     print("daemon:")
     print(f"  running             = {st.get('running')}")
@@ -577,6 +704,8 @@ def cmd_check(a):
     print(f"  port                = {st.get('port')}")
     if not st.get("extension_connected"):
         print("  → 浏览器扩展未连接，先打开浏览器确认扩展已启用。")
+        print()
+        print(daemon_start_hint())
         return EXIT_DAEMON
 
     tabs = []
@@ -640,7 +769,7 @@ def cmd_search(a):
             print("[提示] 多半是淘宝登录态过期，先在浏览器登录淘宝。", file=sys.stderr)
         return EXIT_EMPTY
 
-    render_md(res, a.site, a.keyword, a.sort, a.limit, res["elapsed"])
+    render_md(res, a.site, a.keyword, a.sort, a.limit, res["elapsed"], show_all=a.all)
     if a.json:
         p = dump_json(res, a.site, a.keyword, a.sort, a.limit, a.json)
         print(f"\nJSON 已写入：{p}")
@@ -668,6 +797,8 @@ def main(argv=None):
     s.add_argument("--max-scrolls", type=int, default=0, help="淘宝页面滚动次数（默认 0，只取当前页）")
     s.add_argument("--json", metavar="PATH", help="把结构化结果写到文件")
     s.add_argument("--no-fallback", action="store_true", help="playbook 抽取为空时不回退自写 DOM 抽取")
+    s.add_argument("--all", action="store_true",
+                   help="连开发板/成品模块/混装包/系列链接一起显示（默认只显示可比元器件）")
     s.set_defaults(func=cmd_search)
 
     a = ap.parse_args(argv)
