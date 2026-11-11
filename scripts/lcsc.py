@@ -70,6 +70,13 @@ _ANTIBOT_HINT = (
     "  3) 用真实浏览器取一次 cookie 存下来（之后自动带上）：python lcsc.py cookie；\n"
     "  4) 若 ③ 也不行，说明该出口 IP 被封，换网络或用浏览器的 fetch 通道。"
 )
+# 商品页（item.szlcsc.com）是另一套 WAF，跟搜索接口无关；不要用上面那套处置建议
+_WAF_HINT = (
+    "商品页被阿里云 WAF（acw_sc__v2）拦了 —— 这是页面级挑战，不是搜索接口限流。\n"
+    "  1) 确认 Kimi WebBridge daemon 与浏览器扩展已连接：python taobao.py check；\n"
+    "  2) 连上后重跑即可（脚本会自动改用真实浏览器读商品页）；\n"
+    "  3) 只想绕过浏览器：用 `python lcsc.py cookie` 存一份 cookie（浏览器里取，含 acw_sc__v2），再重跑。"
+)
 
 # sortNumber 实测语义（详见 references/lcsc-api.md）
 SORT_MAP = {
@@ -153,6 +160,18 @@ def _looks_like_challenge(text, status):
     if head.startswith("<") and ("tws2_" in head or "_xvasu" in head):
         return True
     return False
+
+
+# 商品页（item.szlcsc.com）另有一套阿里云 WAF：返回 200 + 一个 20 余 KB 的
+# `acw_sc__v2` 计算页（`aliyun_waf_aa` / `arg1=`）。**它长得不像错误页**（HTTP 200、
+# 有完整 HTML），旧代码因此把它当成"这料没有上传 PDF"，把反爬误报成业务结论。
+_WAF_MARKERS = ("aliyun_waf_aa", "acw_sc__v2", "acw_tc", "renderData")
+
+
+def _looks_like_waf(text):
+    """阿里云 WAF 的 JS 挑战页（商品页用）。真商品页里不会出现这些标记。"""
+    head = (text or "")[:2000]
+    return any(k in head for k in _WAF_MARKERS)
 
 
 
@@ -372,13 +391,41 @@ class Lcsc:
         return text
 
     # -- 数据手册（PDF 签名直链 / 下载） ---------------------------------------
-    def datasheet_pdf(self, product_code, download=None):
+    def _pdf_via_browser(self, product_id):
+        """商品页被阿里云 WAF 拦时，用真实浏览器（Kimi WebBridge）读页面取签名直链。
+
+        浏览器里 JS 跑完就有 `acw_sc__v2`，页面是完整商品页；`datasheet_pdf()` 自动降级到这里。
+        桥不可用 → 抛 AntiBotError（明确"被拦了"，不冒充"没手册"）。
+        """
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        try:
+            import taobao  # 同目录，复用它的 WebBridge 客户端
+        except ImportError as e:  # pragma: no cover
+            raise AntiBotError(
+                "商品页被阿里云 WAF 拦（acw_sc__v2），且同目录没有 taobao.py 无法走浏览器兜底",
+                _WAF_HINT) from e
+        br = taobao.Bridge(session="bom-sourcing", timeout=120)
+        st = br.status()
+        if not (st.get("running") and st.get("extension_connected")):
+            raise AntiBotError(
+                "商品页被阿里云 WAF 拦（acw_sc__v2），浏览器桥未就绪（daemon 或扩展未连接）",
+                _WAF_HINT)
+        br.navigate(ITEM_URL.format(product_id=product_id), new_tab=True,
+                    group_title="配单比价")
+        page = br.evaluate("document.documentElement.outerHTML") or ""
+        cands = [html.unescape(m.group(0)) for m in _PDF_URL_RE.finditer(page)]
+        return max(cands, key=len) if cands else None
+
+    def datasheet_pdf(self, product_code, download=None, browser="auto"):
         """取数据手册 PDF 的签名直链，可选下载到本地。
 
         实测（2026-11）：
           - https://datasheet.lcsc.com/{pdfDESProductId}.pdf 只返回 101~117 字节的跳转 HTML（已失效）
           - 真实 PDF 在商品页 pdfFileDetailVO 里：atta.szlcsc.com + OSS 签名参数
-        返回 (url, path)；没有手册的料 os 返回 (None, None)。
+          - 商品页对脚本流量会返回 **阿里云 WAF 的 acw_sc__v2 挑战页**（HTTP 200、20 余 KB），
+            此时 `browser="auto"` 自动改用真实浏览器；被拦而浏览器也不可用则抛 AntiBotError
+            （以前这里返回 None，被调用方写成"该料没有上传 PDF"，是错的）
+        返回 (url, path)；确认没有手册的料返回 (None, None)。
         """
         code = product_code.strip().upper()
         key = "pdf:" + code
@@ -389,12 +436,21 @@ class Lcsc:
             if not pid:
                 return None, None
             page = self._get_direct(ITEM_URL.format(product_id=pid))
-            # 页面里同一份 PDF 出现多次：先是不带签名的裸地址（会被跳转拦截），
-            # 后面才是带 Expires/Signature 的可用直链 → 取最长的那条。
-            cands = [html.unescape(m.group(0)) for m in _PDF_URL_RE.finditer(page)]
-            if not cands:
-                return None, None
-            url = max(cands, key=len)
+            if _looks_like_waf(page):
+                if browser in (False, "never"):
+                    raise AntiBotError(
+                        f"{code} 商品页被阿里云 WAF 拦（acw_sc__v2），未启用浏览器兜底",
+                        _WAF_HINT)
+                url = self._pdf_via_browser(pid)
+                if not url:
+                    return None, None
+            else:
+                # 页面里同一份 PDF 出现多次：先是不带签名的裸地址（会被跳转拦截），
+                # 后面才是带 Expires/Signature 的可用直链 → 取最长的那条。
+                cands = [html.unescape(m.group(0)) for m in _PDF_URL_RE.finditer(page)]
+                if not cands:
+                    return None, None
+                url = max(cands, key=len)
             if self.use_cache:
                 cache_put(key, url)
         if not download:
@@ -777,7 +833,8 @@ def cmd_detail(a):
             if path:
                 print(f"  已下载: {path}（{path.stat().st_size} 字节）→ 用 read-pdf skill 读")
         else:
-            print("  数据手册: 该料没有上传 PDF，或商品页结构已变")
+            print("  数据手册: 商品页里没有 PDF 链接（该料确实没上传手册；"
+                  "若是 WAF 拦截会直接报错而不是这句话）")
     else:
         print("  数据手册: 加 --pdf 取直链（旧的 datasheet.lcsc.com 直链已失效）")
     if rec["params"]:

@@ -41,6 +41,15 @@ DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 CAT_YAML = DATA_DIR / "categories.yaml"
 CAT_JSON = DATA_DIR / "categories.json"
 
+# 反向电流阻断：**用户说了才筛选，没说只标注**（立创没有这个参数键，只能查知识库）
+# 见 data/knowledge/load-switch.yaml 与 scripts/loadswitch.py
+_RB_RE = re.compile(
+    r"防倒灌|防反灌|防反接|反向电流阻断|反向阻断|反向电流保护|阻断反向|不许倒流|不允许倒流"
+    r"|不能倒流|防倒流|ORing|OR-ing|理想二极管|理想二極管",
+    re.I)
+# 哪些品类默认带「反向阻断」列（其它品类靠知识库命中动态开启，避免整列 ❔未核 的噪音）
+_RB_FAMILIES = ("powerswitch", "load_switch")
+
 # --------------------------------------------------------------------- 物理量别名
 # quant -> (中文/英文键名片段, 单位类别, 极性)
 #   极性 eq  : 要求相等（输出电压、容值）
@@ -345,22 +354,34 @@ def parse_intent(text, family):
     t = str(text or "")
     volt_role = FAMILY_VOLT_ROLE.get(family)
     amp_role = FAMILY_AMP_ROLE.get(family)
-    for m in re.finditer(r"([-−]?)\s*(\d+(?:\.\d+)?)\s*(?:~\s*([-−]?)\s*(\d+(?:\.\d+)?))?\s*V\b", t, re.I):
+    # 区间写成「3.3V~21V」或「3.3~21V」都要吃得住：先扫区间，再扫单值（跳过已被区间覆盖的位置），
+    # 否则「3.3V~21V」会被拆成 3.3V 与 21V 两条独立约束（21V 当"不低于"是错的语义）。
+    volt_spans = []
+    for m in re.finditer(
+            r"([-−]?)\s*(\d+(?:\.\d+)?)\s*V?\s*[~～\-–—]\s*([-−]?)\s*(\d+(?:\.\d+)?)\s*V\b",
+            t, re.I):
+        volt_spans.append(m.span())
+        lo, hi = float(m.group(2)), float(m.group(4))
+        pol = ALIASES.get(volt_role or "", ("", "", "eq"))[2]
+        if volt_role and pol == "in":
+            # 工作电压是区间参数：要求候选区间**覆盖** [lo, hi]
+            out.append(Constraint(volt_role, "cover", (lo, hi), m.group(0).strip(), "V"))
+            continue
+        if volt_role:
+            out.append(Constraint(volt_role, ">=", hi, m.group(0).strip(), "V"))
+    for m in re.finditer(r"([-−]?)\s*(\d+(?:\.\d+)?)\s*V\b", t, re.I):
+        if any(a <= m.start() < b for a, b in volt_spans):
+            continue
         # 负号：MOSFET 的 `-30V` 是**P 沟道**的习惯写法，参数仍是 30V（绝对值）
         neg = bool(m.group(1))
         lo = float(m.group(2))
-        hi = float(m.group(4)) if m.group(4) else None
         if neg and (family or "") in ("mosfet",):
-            out.append(Constraint("count_type", "=", "P沟道", f"P沟道（{m.group(0)} 推得）", ""))
+            out.append(Constraint("count_type", "=", "P沟道", f"P沟道（{m.group(0).strip()} 推得）", ""))
         if volt_role:
             # 极性决定语义：输出电压要"是 3.3V"，耐压/漏源电压只要"不低于"
             pol = ALIASES.get(volt_role, ("", "", "eq"))[2]
-            if hi is not None and pol == "in":
-                # 工作电压是区间参数：「3.3V~21V」要求候选区间**覆盖** [3.3, 21]
-                out.append(Constraint(volt_role, "cover", (lo, hi), m.group(0), "V"))
-                continue
-            op = "=" if (pol == "eq" and hi is None) else ">="
-            out.append(Constraint(volt_role, op, lo, m.group(0), "V"))
+            op = "=" if pol == "eq" else ">="
+            out.append(Constraint(volt_role, op, lo, m.group(0).strip(), "V"))
     # 沟道类型：`N沟道` / `N 沟道` / `NMOS` / `P 沟道` / `PMOS`
     if (family or "") in ("mosfet",) and not any(c.quant == "count_type" for c in out):
         mc = re.search(r"\b([NP])\s*(?:沟道|MOS|MOSFET)\b", t, re.I)
@@ -630,6 +651,30 @@ def function_gate(rec, info, family=None):
     return function_check(name, pos, neg, family=family)
 
 
+def _rb_reason(rb):
+    """把 reverse_block 判定翻译成一句人话（用于落选原因与提示）。"""
+    if not rb:
+        return "未核"
+    v, g = rb.get("value"), rb.get("grade")
+    if v == "no":
+        return "该料反向经体二极管导通（手册明确）" if g == "fact" else "疑似不阻断（仅见分销页）"
+    if v == "yes":
+        return f"有阻断但证据只到 {g}（筛选要求 fact）" if g != "fact" else "有阻断"
+    return "未查手册登记" if not rb.get("known") else "登记为未核实"
+
+
+def _rb_cell(rb):
+    """表格单元格：只有 fact 级才用 ✅/❌，其余加问号提示不可当结论。"""
+    if not rb:
+        return ""
+    v, g = rb.get("value"), rb.get("grade")
+    if v == "yes":
+        return "✅有" if g == "fact" else f"?有({g or '未证'})"
+    if v == "no":
+        return "❌无" if g == "fact" else f"?无({g or '未证'})"
+    return "❔未核"
+
+
 def param_brief(rec, info, limit=4):
     keys = (info or {}).get("key_constraints") or []
     out = []
@@ -722,13 +767,16 @@ def verify_candidates(cli, picked, n, qty, info=None, family=None):
 
 
 def render(cat, qty, picked, total_scanned, fails_stat, unknowns, args,
-           pkg_fallback=None, pkg_need=None, pkg_dist=None):
+           pkg_fallback=None, pkg_need=None, pkg_dist=None,
+           rb_active=False, rb_require=False, rb_dropped=None):
     label = cat.get("label_cn") or cat.get("keyword")
     print(f"\n品类: {label}（catalogIdFilter={cat.get('catalog_id') or '未解析'}，关键词={cat.get('keyword')}）")
     print(f"扫描 {total_scanned} 条候选，按 {args.sort} 排序；数量 {qty}；命中 {len(picked)} 条")
     shown = [c.raw for c in (getattr(args, "_constraints", None) or [])]
     if pkg_need:
         shown.append(f"封装={pkg_need}")
+    if rb_require:
+        shown.append("反向电流阻断=有（fact 级证据）")
     if shown:
         print("约束: " + "，".join(shown))
     if pkg_dist:
@@ -740,20 +788,32 @@ def render(cat, qty, picked, total_scanned, fails_stat, unknowns, args,
             return
         print("下面这些料**其余约束都满足、只是封装不对**，供取舍：")
     if picked:
-        header = ["#", "C号", "型号", "品牌", "封装（含面积）", "关键参数", f"单价@{qty}", "库存", "销量"]
+        header = ["#", "C号", "型号", "品牌", "封装（含面积）", "关键参数"]
+        if rb_active:
+            header.append("反向阻断")
+        header += [f"单价@{qty}", "库存", "销量"]
         rows = []
         for i, r in enumerate(picked, 1):
             price = price_at(r, qty)
             brief = param_brief(r, cat.get("info"), limit=5)
-            rows.append([str(i), r.get("code") or "", (r.get("model") or "")[:28], (r.get("brand") or "")[:16],
-                         pkg_meta(r.get("package"))["label"],
-                         brief[:80] + ("…" if len(brief) > 80 else ""),
-                         money(price) if price is not None else "?", f"{r.get('stock') or 0:,}",
-                         str(r.get("sales") or 0)])
+            row = [str(i), r.get("code") or "", (r.get("model") or "")[:28], (r.get("brand") or "")[:16],
+                   pkg_meta(r.get("package"))["label"],
+                   brief[:80] + ("…" if len(brief) > 80 else "")]
+            if rb_active:
+                row.append(_rb_cell(r.get("reverse_block")))
+            row += [money(price) if price is not None else "?", f"{r.get('stock') or 0:,}",
+                    str(r.get("sales") or 0)]
+            rows.append(row)
         widths = [max(cwidth(h), *(cwidth(row[i]) for row in rows)) for i, h in enumerate(header)]
         print("  " + "  ".join(pad(h, widths[i]) for i, h in enumerate(header)))
         for row in rows:
             print("  " + "  ".join(pad(v, widths[i]) for i, v in enumerate(row)))
+        if rb_active:
+            if rb_require:
+                print("  反向阻断 = 手册确认（fact 级）才算「有」；未提要求的搜索不加这列筛选，只标注。")
+            else:
+                print("  反向阻断：只标注、未筛选（用户没提这条要求）。要筛就加一句「防倒灌」"
+                      "或 --require-reverse-block。")
     if pkg_fallback:
         print(f"\n## 封装回退候选（需求 {pkg_need}；其余约束全部满足，仅封装不同）")
         fb_header = ["C号", "型号", "品牌", "实际封装", "差异", f"单价@{qty}", "库存"]
@@ -1151,7 +1211,24 @@ def cmd_pick(args):
     ok, fails_all, unknown_dropped = [], [], []
     func_mismatch, func_unconfirmed, func_conflict = [], [], []
     pkg_fallback = []  # 封装不符、但其余约束全满足的候选（用户要求"依然列出来并说明"）
+    rb_require = bool(getattr(args, "require_reverse_block", False)) or (
+        not getattr(args, "no_reverse_block", False) and bool(_RB_RE.search(text)))
+    rb_mod, rb_data = None, None
+    rb_active = rb_require or (cat.get("family") in _RB_FAMILIES)
+    if rb_active:
+        try:
+            import loadswitch as _ls
+            rb_mod, rb_data = _ls, _ls.load()
+        except Exception as e:  # 判据库坏掉不能拖垮选型
+            print(f"[警告] 反向阻断判据库加载失败，已按未知处理：{e}", file=sys.stderr)
+            rb_mod = None
+    rb_dropped = []
     info = cat.get("info") or {}
+    # 非功率开关品类：只有当候选里真的有登记过的料时才开这列（否则整列 ❔未核 是噪音）
+    if rb_mod is not None and not rb_active:
+        _parts = (rb_data or {}).get("parts") or {}
+        if any((r.get("code") or "") in _parts for r in recs):
+            rb_active = True
     for r in recs:
         good, fails, unknowns = evaluate(r, cs)
         if not good:
@@ -1168,6 +1245,16 @@ def cmd_pick(args):
                 func_conflict.append(f"{r.get('model')}（{why}）")
             elif verdict == "unknown":
                 func_unconfirmed.append(r.get("model"))
+        # 反向电流阻断：知识库里 fact 级才算「有」；用户提了要求才据此淘汰
+        if rb_mod is not None:
+            rb = rb_mod.reverse_block(code=r.get("code"), model=r.get("model"),
+                                      name=r.get("name") or "", data=rb_data)
+            r["reverse_block"] = rb
+            if rb_require and not (rb["value"] == "yes" and rb.get("grade") == "fact"):
+                why = _rb_reason(rb)
+                rb_dropped.append((r, why))
+                fails_all.append(f"反向阻断:{why}")
+                continue
         if unknowns and not args.allow_unknown:
             # 关键约束在该料上根本没这个参数 → 不能当作"满足"（例如只标了 300mA 的料没写耐压）
             unknown_dropped.append(r)
@@ -1201,7 +1288,20 @@ def cmd_pick(args):
         pkg_dist = [f"{k}×{v}" for k, v in cnt.most_common(6)]
     all_unknowns = [u for r in recs for u in evaluate(r, cs)[2]]
     render(cat, args.qty, picked, scanned, fails_stat, all_unknowns, args,
-           pkg_fallback=pkg_fallback, pkg_need=pkg_need, pkg_dist=pkg_dist)
+           pkg_fallback=pkg_fallback, pkg_need=pkg_need, pkg_dist=pkg_dist,
+           rb_active=rb_active, rb_require=rb_require, rb_dropped=rb_dropped)
+    if rb_require and rb_dropped:
+        print("\n## 反向电流阻断筛选（要求：有反向阻断，且证据为 fact）")
+        print(f"  已剔除 {len(rb_dropped)} 条（其余约束满足，仅这一项不达标/未核实）：")
+        for r, why in rb_dropped[:5]:
+            print(f"    {r.get('code')} {r.get('model')}（{r.get('brand')}）—— {why}")
+        if len(rb_dropped) > 5:
+            print(f"    …… 另 {len(rb_dropped) - 5} 条")
+        print("  说明：立创参数表没有「反向电流阻断」字段，判定只能来自手册登记"
+              "（data/knowledge/load-switch.yaml）；未登记的料一律按未核实剔除，不猜。")
+        print("  补登记：`python loadswitch.py add <C号> --model <型号> --class <类别> "
+              "--reverse-block yes|no --grade fact --basis \"手册哪一节怎么说\" "
+              "--authorized \"谁/何时/为什么\"`")
     if bl_hits:
         names = []
         for h in bl_hits[:3]:
@@ -1242,6 +1342,12 @@ def cmd_pick(args):
             "constraints": [c.raw for c in constraints],
             "package_need": pkg_need,
             "package_distribution": pkg_dist,
+            "reverse_block_required": bool(rb_require),
+            "reverse_block_dropped": [
+                {"code": r.get("code"), "model": r.get("model"),
+                 "brand": r.get("brand"), "reason": why,
+                 "reverse_block": r.get("reverse_block")}
+                for r, why in rb_dropped],
             "picked": [dict(r, unit_price=price_at(r, args.qty),
                             package_meta=pkg_meta(r.get("package"))) for r in picked],
             "package_fallback": [dict(r, unit_price=price_at(r, args.qty),
@@ -1322,6 +1428,11 @@ def main(argv=None):
     p.add_argument("--allow-unknown", action="store_true", help="允许缺少约束参数的料入选")
     p.add_argument("--no-func", dest="no_func", action="store_true",
                    help="关闭功能符合性校验（默认开启：滤掉名称含反向功能词的料，如把降压转换器当负载开关）")
+    p.add_argument("--require-reverse-block", dest="require_reverse_block", action="store_true",
+                   help="要求「有反向电流阻断」并据此筛选（只认知识库里 fact 级证据；"
+                        "句子里写「防倒灌」等词等同于加这个开关）")
+    p.add_argument("--no-reverse-block", dest="no_reverse_block", action="store_true",
+                   help="即使句子里提到防倒灌，也只标注不筛选（把要求降级为提示）")
     p.add_argument("--no-blacklist", dest="no_blacklist", action="store_true",
                    help="本次忽略黑名单（默认按 data/knowledge/blacklist.yaml 剔除品牌/料号）")
     p.add_argument("--no-whitelist", dest="no_whitelist", action="store_true",

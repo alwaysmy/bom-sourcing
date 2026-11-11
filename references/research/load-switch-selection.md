@@ -37,12 +37,17 @@
 
 | 型号 | 立创商品名/描述 | 实际是什么 | 判定 |
 | --- | --- | --- | --- |
-| LP5280SHVF | 集成TVS的28V/5A过压保护开关 | 过压保护负载开关 | ✅ 可用 |
+| LP5280SHVF | 集成TVS的28V/5A过压保护开关 | 过压保护负载开关（单管） | ⚠ 过压保护可用；**不阻断反向**（手册 Rev1.5 §USB On-The-Go：OUT 供电时 IN 经体二极管被拉起至 VOUT−0.7V），要防倒灌不可用 |
 | SK62536DC10-ADJ | 商品名只有型号 | **过压保护开关（OVP）**：手册原文 "Over-Voltage Protection device … internal nFET for USB VBUS line" | ✅ 可用（固定 OVLO 6V / 可调 4~16V，选型要注意门限） |
 | HS2950P.M | 商品名只有型号 | **配电负载保护热插拔开关**：Mouser 描述 "电源开关 IC - 配电 29V 5A Load Protection Hot-Swap" | ✅ 可用（需原厂/分销商确认） |
-| TPS259470/2ARPWR | 2.7V至23V、5.5A、28mΩ 真反向电流阻断**电子保险丝** | eFuse（可调限流） | ✅ 可用 |
-| SIP32434BDN/ADN | 6A、33mΩ、2.8V 至 23V 带可编程电流限制和过压保护的**电子保险丝** | eFuse | ✅ 可用 |
+| TPS259470/2ARPWR | 2.7V至23V、5.5A、28mΩ 真反向电流阻断**电子保险丝** | eFuse（可调限流） | ✅ 可用（**有反向电流阻断**，防倒灌场景首选） |
+| SIP32434BDN/ADN | 6A、33mΩ、2.8V 至 23V 带可编程电流限制和过压保护的**电子保险丝** | eFuse | ✅ 可用（反向阻断能力未核实，需查手册） |
 | ~~MP4316GRE-Z~~ | 45V, 6A, **同步降压转换器**，带扩频功能 | 降压转换器（DCDC） | ❌ 功能不符 |
+
+> **判据缺口（已补）**：「反向电流阻断 / 防倒灌」不在立创参数表里，上表最初只按「工作电压 + 电流」
+> 选型，漏了这一项。现已入库：`data/knowledge/load-switch.yaml` + `scripts/loadswitch.py`，
+> `pick.py` 在用户提到「防倒灌 / 反向电流阻断 / ORing / 理想二极管」时据此筛选，未提时只标注。
+> 详见 `references/load-switch-rules.md`。
 
 核对手段（按可靠性从高到低）：① 商品名里的中文功能词 → ② 立创参数键 → ③ 数据手册第一段
 （`python lcsc.py detail <C号> --pdf --download <目录>`，再用 read-pdf 读）→ ④ 原厂/分销商描述

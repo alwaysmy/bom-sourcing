@@ -44,7 +44,9 @@
   优先于品类）、**品牌归并**（立创把同一家公司拆成两条时按 `brand-aliases.yaml` 人工复核登记）。
   背调队列 `brand_queue.py` 按料号数 × 品类广度 × 采购频次排优先级，已处理的不再占位。
 - **判据知识库**：`data/knowledge/mosfet.yaml`（EAS 雪崩能量、SOA 校核、工艺反推的
-  fact/inference 分级、9 类应用语义）+ `brands.index.yaml`（1,296 品牌全集）+ `vendors.yaml`（145 品牌 tier）。
+  fact/inference 分级、9 类应用语义）+ `load-switch.yaml`（**反向电流阻断/防倒灌、理想二极管能力**，
+  立创参数表没有这些字段，只能查手册登记）+ `brands.index.yaml`（1,296 品牌全集）+ `vendors.yaml`（145 品牌 tier）。
+  反向阻断的语义是「用户提了要求就筛选，没提只标注」，登记用 `loadswitch.py`（写操作需 `--authorized`）。
 
 ## 安装
 
@@ -67,6 +69,7 @@ scripts/brands.py        品牌索引（按品类枚举立创品牌 facet，1,29
 scripts/brand_dossier.py 品牌背调档案（多渠道取证 + 事实/自述/推论三级标注 + 分层判定）
 scripts/whitelist.py     品牌白名单（按「品牌 × 品类」放行；写操作需 --authorized；含 preclear 免背调 / reject 判不推荐）
 scripts/brand_queue.py   品牌背调队列（料号数 × 品类广度 × 采购频次排优先级；已处理的不再占队列）
+scripts/loadswitch.py    功率开关功能判据（反向电流阻断/防倒灌/理想二极管：查询与登记，写操作需 --authorized）
 scripts/brands.py        立创品牌索引（1,296 品牌全集）+ 品牌归并登记（brand-aliases.yaml → merge_into）
 data/categories.yaml  26 family 的品类 id、参数键与关键约束
 data/spec-rules.yaml  32 family 的 critical/relaxable 参数、降额基准、风险备注

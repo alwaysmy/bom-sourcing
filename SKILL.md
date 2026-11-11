@@ -362,6 +362,30 @@ python brand_queue.py --family mosfet     # 按品类过滤
 （`N沟道 30V 5A` 只返 Vdss=30 且 Id=5，5.7A 的料反而不出现）；
 `totalCount` 有 **1500 硬上限**；`spotFilter=0` 静默返 0 条。
 
+## 反向电流阻断（防倒灌）—— 说了就筛，没说只标
+
+立创对「功率电子开关(969)」只给 `类型/工作电压/通道数/输入控制逻辑/最大连续电流/导通电阻` 六个键，
+**没有「反向电流阻断」这个字段**，只能查手册后登记进 `data/knowledge/load-switch.yaml`。
+
+```bash
+cd scripts
+python loadswitch.py check C47345802        # ❌ 不阻断（手册 Rev1.5 §OTG：反向经体二极管导通）
+python loadswitch.py check C3662799         # ✅ 有阻断（TI TPS25947 True Reverse Current Blocking）
+python loadswitch.py classes                # 各类器件默认能力（单管/背对背/eFuse/OVP/理想二极管…）
+python pick.py "找 3.3V~21V 5A 防倒灌的负载开关"   # 句子里有"防倒灌" → 筛选（只认 fact 级）
+python pick.py "找 3.3V~21V 5A 的负载开关"         # 没说 → 只标注一列，不淘汰
+```
+
+| 用户怎么说 | 行为 |
+|---|---|
+| 提到 防倒灌 / 防反灌 / 反向电流阻断 / 不许倒流 / ORing / 理想二极管，或用 `--require-reverse-block` | **筛选**：只留 `reverse_block=yes` 且 `grade=fact`；其余进「反向电流阻断筛选」段并给原因 |
+| 没提，但品类是功率电子开关 | **只标注**：多一列 ✅有 / ❌无 / ❔未核，不据此淘汰；`--no-reverse-block` 可把要求降级为标注 |
+
+**理想二极管也要单独核**：名字不等于参数表结论 —— 控制器+外部单管的阻断靠快速关断（`t_rev` 窗口内倒流），
+只有外部双管才硬阻断；带 reverse polarity protection 的型号边界也不同。`loadswitch.py infer` 只给类别提示。
+
+判据与实例见 `references/load-switch-rules.md`；登记写操作需 `--authorized`（与黑名单/白名单同一套门禁）。
+
 ## 配单流程（脚本已实现的部分标 ✅）
 
 | 步 | 做什么 | 脚本 |
@@ -411,6 +435,7 @@ python brand_queue.py --family mosfet     # 按品类过滤
 | `scripts/brand_dossier.py` | **品牌背调档案**：多渠道取证 + 事实/自述/推论三级标注 + 分层判定 + 出报告 | 纯标准库 + pyyaml |
 | `scripts/whitelist.py` | **品牌白名单**：按「品牌 × 品类」放行（approved/kb_known/pending/跨品类/unknown），写操作需授权 | 纯标准库 + pyyaml |
 | `scripts/brand_queue.py` | **品牌背调队列**：按料号数 × 品类广度 × 采购频次排优先级，回答"下一步该背谁" | 纯标准库 + pyyaml |
+| `scripts/loadswitch.py` | **功率开关功能判据**：反向电流阻断（防倒灌）/ 理想二极管能力查询与登记，写操作需授权 | 纯标准库 + pyyaml |
 
 公共约定：价格为**人民币含税单价**并按数量取阶梯；结果带抓取时间；缓存默认 6 小时
 （`%LOCALAPPDATA%\bom-sourcing\cache`，`--no-cache` 关闭）。
@@ -438,6 +463,9 @@ python brand_queue.py --family mosfet     # 按品类过滤
   事实/自述/推论三级标注、分层判定规则、操作手册、落地到采购动作）
 - `references/mosfet-rules.md`：**MOSFET 判据速查**（立创能判/不能判、EAS 与 SOA 校核式、
   工艺反推的 fact/inference 分级、9 类应用语义、已修缺陷），机读版 `data/knowledge/mosfet.yaml`
+- `references/load-switch-rules.md`：**功率开关功能判据**（反向电流阻断/防倒灌/理想二极管：为什么立创查不到、
+  七类器件默认能力、理想二极管的三层差异、「说了就筛、没说只标」语义、已登记实例、已知边界），
+  机读版 `data/knowledge/load-switch.yaml`（`loadswitch.py` 维护）
 - `data/spec-rules.yaml`：32 个器件 family 的可机读规则（critical/relaxable 参数、默认型号库、风险备注），
   人读版见 `references/research/spec-rules.md`
 - `data/categories.yaml`：品类索引（26 个 family → 中文品类名、立创 `catalogId`、真实参数键与取值样例、
@@ -446,7 +474,8 @@ python brand_queue.py --family mosfet     # 按品类过滤
   `industry-norms.yaml`（降额与隐性应力）、`workflow.yaml`（D0–D9 机读版）、`vendors.yaml`（145 品牌 tier）、
   `blacklist.yaml`（品牌/店铺/料号黑名单，`blacklist.py` 维护）、`brands.index.yaml`（**1,296 品牌全集**，
   `brands.py build` 自动重建，与 `vendors.yaml` 用 brand_id 关联）、`mosfet.yaml`（MOSFET 判据库）、
-  `brands.dossier/`（**品牌背调档案**，每条证据带渠道/链接/等级/把握，`brand_dossier.py` 维护）、`whitelist.yaml`（品牌 × 品类放行表，`whitelist.py` 维护）
+  `brands.dossier/`（**品牌背调档案**，每条证据带渠道/链接/等级/把握，`brand_dossier.py` 维护）、`whitelist.yaml`（品牌 × 品类放行表，`whitelist.py` 维护）、
+  `load-switch.yaml`（**功率开关功能判据**：反向电流阻断等立创没有的字段，`loadswitch.py` 维护）
 - `references/research/`：调研证据链（`BOM-配单-调研报告.md` 总报告、`lcsc-probe.md` 立创接口、
   `market-probe.md` 淘宝/1688 实测、`taobao-pick.md` 淘宝比价实测、`github-tools.md` 现成轮子、
   `cn-knowledge.md` 行业方法论、`spec-rules.md`、`categories.md`、`methodology-survey.md`、`vendors.md`）
@@ -458,6 +487,8 @@ python brand_queue.py --family mosfet     # 按品类过滤
 
 **已验证可用**
 - 立创中文站搜索、阶梯价、库存、销量排序、结构化参数、商品页与 datasheet 直链（全部免登录）
+- **反向电流阻断（防倒灌）**：`loadswitch.py` 知识库 + `pick.py` 门禁（说"防倒灌"就筛选、没说只标注）；
+  实测 LP5280SHVF 判 ❌（手册 §OTG：反向经体二极管导通）、TPS259470/472 判 ✅（TI True Reverse Current Blocking）
 - **按意图选型**：品类解析（`catalogGroup` → `catalogIdFilter`）+ 客户端参数筛选 + 排序去重
   （实测：`"找 3.3V 1A 的 LDO"` → AMS1117-3.3 / TLV75733 等；`"10uF 25V 0805 电容"` → 三星 CL21A106KAYNNNE；
   `MOS 30V 5A N 沟道` → AO3400A / AO3400 / CJ3400；约束卡掉多少条会逐条报"落选主因"）

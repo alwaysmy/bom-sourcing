@@ -1,0 +1,130 @@
+schema: bom-sourcing/knowledge/load-switch
+version: 1
+generated: '2026-11-11'
+locale: zh-CN
+purpose: >-
+  功率电子开关（负载开关 / eFuse / 过压保护开关 / 理想二极管 / ORing / 热插拔 / 电源多路）
+  的**功能判据**。这些判据立创 paramLinkedMap 里没有对应字段，只能查手册后人工登记；
+  登记后 pick.py 才能「用户提了要求就筛选、没提就标注」。
+scope:
+  - reverse_block
+
+evidence_policy:
+  grades:
+    fact: 手册特性表或正文明确写出，登记时写 basis（章节/页码），**可用于筛选**
+    claim: 分销页、代理商描述、卖家标题，只能标注
+    inference: 由器件类别或型号命名推断，只能标注
+  filter_rule: 只有 grade=fact 的条目才能作为筛选依据；claim / inference 只能作为标注提示
+  never_infer:
+    - 反向电流阻断能力
+    - 反向恢复时间 / 反向漏电
+    - SOA 曲线数值
+    - 软启动时间
+  note: >-
+    「不确定就登记成 unknown，不要猜」—— 猜错的代价是板子做出来倒灌烧机，
+    而 unknown 的代价只是多查一次手册。
+
+reverse_block:
+  question: V(OUT) 高于 V(IN) 时，这颗器件会让电流倒流吗？
+  meaning:
+    'yes': 有反向电流阻断（reverse current blocking / ideal diode operation）
+    'no': 不阻断，反向时经体二极管导通
+    unknown: 未核实（没说就不能当满足，也不能当不满足 —— 见 filter 语义）
+  keywords_positive:
+    - reverse current blocking
+    - reverse-current blocking
+    - true reverse current blocking
+    - reverse current protection
+    - reverse blocking
+    - ideal diode operation
+    - back-to-back FET
+    - back-to-back MOSFET
+    - 反向电流阻断
+    - 反向电流保护
+    - 防反灌
+    - 防倒灌
+  keywords_negative:
+    - body diode
+    - through the body diode
+    - OTG
+    - reverse conduction
+    - 体二极管
+    - 倒灌
+  keyword_note: >-
+    关键词只用于「提示该看哪一段」，不能替代读上下文。LP5280 手册确实出现 body diode，
+    但那一段是在讲 OTG 反向供电（IN 被体二极管拉起），正是"无阻断"的直接证据；
+    机械匹配命中 negative 词后必须读上下文再定性。
+
+device_classes:
+  - key: load_switch_single
+    label_cn: 负载开关（单管）
+    reverse_block_default: 'no'
+    why: 只有一只 MOS，关断时体二极管从 OUT 导通回 IN
+  - key: load_switch_b2b
+    label_cn: 负载开关（背对背 FET / True Reverse Blocking）
+    reverse_block_default: 'yes'
+    why: 两只 MOS 背对背，体二极管互相反向，天然阻断
+  - key: efuse
+    label_cn: eFuse / 电子保险丝
+    reverse_block_default: varies
+    why: 主流型号（如 TI TPS25947）集成背对背 FET 并明确写 True Reverse Current Blocking；也存在只做正向限流的型号
+  - key: ovp_switch
+    label_cn: 过压保护开关（OVP Switch）
+    reverse_block_default: 'no'
+    why: 多为单管 + 快速 OVP；部分型号设计上就支持 OTG 反向供电（LP5280 即此类），反向是特性不是缺陷
+  - key: ideal_diode
+    label_cn: 理想二极管 / Ideal Diode
+    reverse_block_default: 'yes'
+    why: 名字本义就是"像理想二极管一样单向导通"，反向关断是它的核心功能
+    caveats:
+      - 控制器 + 外部单 MOS 架构：阻断靠比较器快速关断，仍有反向电流窗口（t_rev 内倒流）；只有外部双管才真正硬阻断
+      - 带 reverse polarity protection 的型号 ≠ 普通 ORing 型号，能力边界要看手册
+      - 少数标 Ideal Diode 的器件只优化正向 VF，反向仍靠体二极管 → 必须以特性表为准
+  - key: oring_controller
+    label_cn: ORing 控制器 / 电源多路（Power MUX）
+    reverse_block_default: varies
+    why: 多路供电场景通常需要阻断，但能力取决于外部 MOS 接法与控制器时序
+  - key: hotswap
+    label_cn: 热插拔控制器
+    reverse_block_default: varies
+    why: 主职是限流与上电斜坡；反向阻断常需外接背对背 MOS 才成立
+
+naming_traps:
+  - 品类名不可推断：立创「功率电子开关(969)」同一个 catalog 里混着负载开关 / OVP 开关 / eFuse / 同步降压转换器
+  - 型号名不可推断：LP5280SHVF 名字里没有 reverse / ideal 字样，实际是 OVP 开关且**不阻断**反向
+  - 「理想二极管」不等于参数表里已确认 reverse blocking —— 是控制器还是集成管、外部单管还是双管都影响结论
+  - 商品名里的「负载开关」是卖家口径，不等于有阻断
+
+parts:
+  C47345802:
+    model: LP5280SHVF
+    brand: LOWPOWER(微源半导体)
+    class: ovp_switch
+    reverse_block: 'no'
+    grade: fact
+    basis: >-
+      Rev1.5(Jan-2024) §USB On-The-Go Operation：ENB 拉低或悬空、OUT 被 OTG 源供 5V 而 IN 无供电时，
+      IN 经 MOSFET 体二极管被拉起至约 VOUT−0.7V，待 IN 高于 UVLO 持续 15ms 后内部 MOS 才导通
+      —— 反向是导通而非阻断
+    source: datasheet
+    checked: '2026-11-11'
+  C3662799:
+    model: TPS259470ARPWR
+    brand: TI(德州仪器)
+    class: efuse
+    reverse_block: 'yes'
+    grade: fact
+    basis: >-
+      TI SLVSFC9C 特性表：True Reverse Current Blocking、集成背对背 FET（R_ON=28.3mΩ typ）、
+      ideal diode operation；并可耐 −15V 负压
+    source: datasheet
+    checked: '2026-11-11'
+  C3662789:
+    model: TPS259472ARPWR
+    brand: TI(德州仪器)
+    class: efuse
+    reverse_block: 'yes'
+    grade: fact
+    basis: 同 TPS25947xx 系列（SLVSFC9C），True Reverse Current Blocking + 集成背对背 FET
+    source: datasheet
+    checked: '2026-11-11'
